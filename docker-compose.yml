@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  fnos-extractor:
+    build: .
+    container_name: fnos-extractor
+    ports:
+      - "5000:5000"
+    volumes:
+      # 挂载下载目录
+      - /volume1/downloads:/volume1/downloads
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+# 使用方法:
+# docker-compose up -d
+# 然后访问 http://localhost:5000
