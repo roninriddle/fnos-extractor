@@ -585,6 +585,7 @@
                     <button class="btn-secondary" id="resumeBtn" onclick="resumeExtraction()" style="flex: 1; display: none;">▶️ 继续</button>
                     <button class="btn-danger" onclick="stopExtraction()" style="flex: 1;">⏹️ 停止</button>
                     <button class="btn-secondary" onclick="showLogs()" style="flex: 1;">📋 日志</button>
+                    <a href="/api/logs/download" class="btn-secondary" style="flex: 1; text-align: center; display: inline-block; line-height: 38px; text-decoration: none;">⬇️ 日志下载</a>
                 </div>
             </div>
 
@@ -1085,19 +1086,14 @@
                 if (successFiles.length > 0 && autoDeleteSuccess) {
                     if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
                         deleteSuccessfulArchives(successFiles);
-                    } else {
-                        location.reload();
                     }
                 } else if (successFiles.length > 0) {
                     // 即使没启用自动删除，也给用户删除的选项
                     if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
                         deleteSuccessfulArchives(successFiles);
-                    } else {
-                        location.reload();
                     }
                 } else {
                     alert(summaryMsg);
-                    location.reload();
                 }
             }, 1000);
         }

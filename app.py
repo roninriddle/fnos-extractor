@@ -82,7 +82,6 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     """
     try:
         file_name = Path(file_path).name.lower()
-
         # 支持 7z/zip/rar 以及 tar 系列
         if file_name.endswith('.7z'):
             # 先用7z l检测
@@ -94,20 +93,19 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     timeout=10
                 )
                 output = (result.stdout + result.stderr).lower()
-                # 7z返回非零，且输出有加密提示
                 if result.returncode != 0:
                     if 'password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output:
                         logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
                         return True, True
                     logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
-                # 输出有加密提示
+                    # 只要命令失败且无加密提示，返回未知
+                    return True, None
                 if 'password' in output or 'encrypted' in output or 'lock' in output or 'can not open encrypted archive' in output:
                     logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
                     return True, True
                 logger.debug(f"7z 文件检测为无加密: {file_path}")
                 return True, False
             except Exception as e:
-                # 7z命令本身失败，尝试用7z t检测
                 logger.warning(f"7z l 检测异常，尝试7z t: {e}")
                 try:
                     result = subprocess.run(
@@ -120,9 +118,12 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     if result.returncode != 0 and ('password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output):
                         logger.debug(f"7z t 检测为加密: {file_path}")
                         return True, True
+                    # 命令失败但无加密提示，返回未知
+                    logger.warning(f"7z t 检测失败: {file_path}")
+                    return True, None
                 except Exception as e2:
                     logger.error(f"7z t 检测也失败: {e2}")
-                return False, None
+                    return True, None
             
         elif file_name.endswith('.zip'):
             result = subprocess.run(
