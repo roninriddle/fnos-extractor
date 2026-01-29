@@ -79,60 +79,82 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     try:
         file_name = Path(file_path).name.lower()
 
-        # 支持 7z/zip/rar 以及 tar 系列 (.tar, .tar.gz, .tgz, .tar.bz2, .tbz2)
+        # 支持 7z/zip/rar 以及 tar 系列
         if file_name.endswith('.7z'):
+            # 使用 7z 的 -y 参数自动确认，避免交互式提示
             result = subprocess.run(
-                ['7z', 'l', file_path],
+                ['7z', 'l', '-y', file_path],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
-            # 7z列出文件失败通常意味着加密
+            # 检查命令返回码和输出内容
+            output = (result.stdout + result.stderr).lower()
+            
+            # 如果返回非零且输出中含有密码/加密提示，则为加密
             if result.returncode != 0:
+                if 'password' in output or 'encrypted' in output or 'wrong password' in output:
+                    logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
+                    return True, True
+                # 返回非零但没有明确提示，可能是其他错误
+                logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
+            
+            # 检查输出中的加密标志
+            if 'password' in output or 'encrypted' in output or 'lock' in output:
+                logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
                 return True, True
-            # 检查输出中是否有密码提示
-            if 'password' in result.stderr.lower() or 'encrypted' in result.stderr.lower():
-                return True, True
+            
+            logger.debug(f"7z 文件检测为无加密: {file_path}")
             return True, False
             
         elif file_name.endswith('.zip'):
             result = subprocess.run(
-                ['unzip', '-l', file_path],
+                ['unzip', '-t', file_path],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
+            output = (result.stdout + result.stderr).lower()
+            
             if result.returncode != 0:
-                # 对于zip，列表失败可能表示加密
-                if 'password' in result.stderr.lower() or 'encrypted' in result.stderr.lower():
+                if 'password' in output or 'encrypted' in output or '[2] cannot find zipfile or read error' in output:
+                    logger.debug(f"ZIP 文件检测为加密: {file_path}")
                     return True, True
-                # 尝试用 unzip -t 检查
-                result2 = subprocess.run(
-                    ['unzip', '-t', file_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                if 'password' in result2.stderr.lower() or 'encrypted' in result2.stderr.lower():
-                    return True, True
+                logger.debug(f"ZIP 文件可能损坏或无加密: {file_path}")
                 return True, False
+            
+            if 'password' in output or 'encrypted' in output:
+                logger.debug(f"ZIP 文件检测为加密: {file_path}")
+                return True, True
+            
+            logger.debug(f"ZIP 文件检测为无加密: {file_path}")
             return True, False
         
         elif file_name.endswith('.rar'):
-            # 对于 RAR，也尝试用 7z 处理（7z 可以处理 rar）
+            # 对于 RAR，尝试用 7z 处理
             result = subprocess.run(
-                ['7z', 'l', file_path],
+                ['7z', 'l', '-y', file_path],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
+            output = (result.stdout + result.stderr).lower()
+            
+            if result.returncode != 0:
+                if 'password' in output or 'encrypted' in output:
+                    logger.debug(f"RAR 文件检测为加密: {file_path}")
+                    return True, True
+            
+            if 'password' in output or 'encrypted' in output or 'lock' in output:
+                logger.debug(f"RAR 文件检测为加密: {file_path}")
+                return True, True
+            
+            logger.debug(f"RAR 文件检测为无加密: {file_path}")
+            return True, False
+            
         elif file_name.endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
             # tar 系列通常不支持加密检测，视为普通压缩包
-            return True, False
-            if result.returncode != 0:
-                return True, True
-            if 'password' in result.stderr.lower() or 'encrypted' in result.stderr.lower():
-                return True, True
+            logger.debug(f"TAR 文件视为无加密: {file_path}")
             return True, False
             
     except subprocess.TimeoutExpired:
@@ -178,10 +200,19 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         
         if result.returncode == 0:
+            logger.info(f"成功解压: {file_path}")
             return True, "解压成功"
         else:
+            error_output = (result.stderr + result.stdout).lower()
+            
+            # 检查是否是密码相关错误
+            if password and ('password' in error_output or 'wrong password' in error_output or 
+                           'encrypted' in error_output or '密码' in error_output):
+                logger.warning(f"密码错误 [{file_path}] 密码: {password}")
+                return False, f"密码错误 (已尝试: {password})"
+            
             error_msg = result.stderr or result.stdout or "未知错误"
-            logger.error(f"解压命令失败 [{file_path}]: {' '.join(cmd)}\n返回码: {result.returncode}\n错误: {error_msg}")
+            logger.error(f"解压命令失败 [{file_path}]: 返回码 {result.returncode}\n命令: {' '.join(cmd)}\n错误: {error_msg}")
             return False, f"解压失败: {error_msg[:200]}"
             
     except subprocess.TimeoutExpired:
