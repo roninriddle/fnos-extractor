@@ -1,6 +1,7 @@
 # FNOS 批量解压工具
 
 🚀 一个生产级别的批量解压工具，支持 Web UI、递归扫描、密码自动检测和智能解压。
+docker pull roninriddle/fnos-extractor
 
 **维护者**: Ronin
 
