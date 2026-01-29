@@ -438,34 +438,48 @@ def scan_directory():
 @app.route('/api/extract', methods=['POST'])
 def extract():
     """开始批量解压"""
-    data = request.get_json()
-    archives = data.get('archives', [])
-    extract_base = data.get('extract_to', '/vol1/1000/Temp')
-    
-    if not archives:
-        return jsonify({'error': '没有选择任何文件'}), 400
-    
-    # 创建临时目录
-    extract_dir = tempfile.mkdtemp(dir=extract_base)
-    
-    tasks = {}
-    for archive in archives:
-        task_id = f"task_{len(tasks)}"
-        tasks[task_id] = archive
-        
-        # 启动后台线程
-        thread = threading.Thread(
-            target=process_extraction_task,
-            args=(task_id, archive, extract_dir)
-        )
-        thread.daemon = True
-        thread.start()
-    
-    return jsonify({
-        'extract_dir': extract_dir,
-        'task_count': len(tasks),
-        'tasks': tasks
-    })
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '无效的请求数据'}), 400
+
+        archives = data.get('archives', [])
+        extract_base = data.get('extract_to', '/vol1/1000/Temp')
+
+        if not archives:
+            return jsonify({'error': '没有选择任何文件'}), 400
+
+        # 确保解压基目录存在
+        try:
+            os.makedirs(extract_base, exist_ok=True)
+        except Exception as e:
+            logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
+            return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
+
+        # 创建临时目录
+        extract_dir = tempfile.mkdtemp(dir=extract_base)
+
+        tasks = {}
+        for i, archive in enumerate(archives):
+            task_id = f"task_{i}"
+            tasks[task_id] = archive
+
+            # 启动后台线程
+            thread = threading.Thread(
+                target=process_extraction_task,
+                args=(task_id, archive, extract_dir)
+            )
+            thread.daemon = True
+            thread.start()
+
+        return jsonify({
+            'extract_dir': extract_dir,
+            'task_count': len(tasks),
+            'tasks': tasks
+        })
+    except Exception as e:
+        logger.exception(f"启动解压失败: {e}")
+        return jsonify({'error': f'启动解压失败: {str(e)}'}), 500
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
