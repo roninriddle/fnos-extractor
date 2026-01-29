@@ -127,8 +127,7 @@ python app.py
 
 ### 3️⃣ 解压配置
 
-指定解压目录（默认为：`/volume1/downloads/extracted`）
-
+指定解压目录
 ### 4️⃣ 开始解压
 
 点击"开始批量解压"按钮，实时查看进度和日志。
@@ -478,3 +477,4 @@ lsof -i :5000
 ---
 
 **Made with ❤️ by Ronin for FNOS users**
+
