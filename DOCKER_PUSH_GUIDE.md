@@ -1,8 +1,8 @@
-# Docker Hub 推送指南 - v1.1.1
+# Docker Hub 推送指南 - v1.1.2
 
 ## 📋 概述
 
-本文档说明如何将 FNOS 批量解压工具 v1.1.1 构建并推送到 Docker Hub。
+本文档说明如何将 FNOS 批量解压工具 v1.1.2 构建并推送到 Docker Hub。
 
 ## 🔧 前提条件
 
@@ -38,7 +38,7 @@ chmod +x push_to_docker_hub.sh
 脚本将自动执行以下步骤:
 - ✅ 验证 Docker 安装
 - ✅ 验证 Docker Hub 认证
-- ✅ 构建镜像 (版本 1.1.1)
+- ✅ 构建镜像 (版本 1.1.2)
 - ✅ 创建 latest 标签
 - ✅ 推送版本标签
 - ✅ 推送 latest 标签
@@ -58,7 +58,7 @@ docker login
 ```bash
 cd /Users/ronin/fnos-extractor
 
-docker build -t roninriddle/fnos-extractor:1.1.1 .
+docker build -t roninriddle/fnos-extractor:1.1.2 .
 ```
 
 构建输出示例:
@@ -73,14 +73,14 @@ Successfully built abc123def456
 ### 步骤 3: 创建 latest 标签
 
 ```bash
-docker tag roninriddle/fnos-extractor:1.1.1 roninriddle/fnos-extractor:latest
+docker tag roninriddle/fnos-extractor:1.1.2 roninriddle/fnos-extractor:latest
 ```
 
 ### 步骤 4: 推送到 Docker Hub
 
 ```bash
 # 推送版本标签
-docker push roninriddle/fnos-extractor:1.1.1
+docker push roninriddle/fnos-extractor:1.1.2
 
 # 推送 latest 标签
 docker push roninriddle/fnos-extractor:latest
@@ -91,7 +91,7 @@ docker push roninriddle/fnos-extractor:latest
 The push refers to a repository [docker.io/roninriddle/fnos-extractor]
 abc123def456: Pushed
 ...
-1.1.1: digest: sha256:... size: ...
+1.1.2: digest: sha256:... size: ...
 ```
 
 ## ✅ 验证推送
@@ -101,15 +101,15 @@ abc123def456: Pushed
 访问: https://hub.docker.com/r/roninriddle/fnos-extractor
 
 您应该看到:
-- ✅ 标签 `1.1.1` 已列出
-- ✅ 标签 `latest` 指向 `1.1.1`
+- ✅ 标签 `1.1.2` 已列出
+- ✅ 标签 `latest` 指向 `1.1.2`
 - ✅ 镜像层信息
 
 ### 方法 2: 从 Docker Hub 拉取验证
 
 ```bash
-# 拉取版本 1.1.1
-docker pull roninriddle/fnos-extractor:1.1.1
+# 拉取版本 1.1.2
+docker pull roninriddle/fnos-extractor:1.1.2
 
 # 拉取 latest
 docker pull roninriddle/fnos-extractor:latest
