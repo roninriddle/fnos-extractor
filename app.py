@@ -71,9 +71,10 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     返回: (是否是压缩包, 是否加密)
     """
     try:
-        file_ext = Path(file_path).suffix.lower()
-        
-        if file_ext == '.7z':
+        file_name = Path(file_path).name.lower()
+
+        # 支持 7z/zip/rar 以及 tar 系列 (.tar, .tar.gz, .tgz, .tar.bz2, .tbz2)
+        if file_name.endswith('.7z'):
             result = subprocess.run(
                 ['7z', 'l', file_path],
                 capture_output=True,
@@ -88,7 +89,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 return True, True
             return True, False
             
-        elif file_ext == '.zip':
+        elif file_name.endswith('.zip'):
             result = subprocess.run(
                 ['unzip', '-l', file_path],
                 capture_output=True,
@@ -111,7 +112,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 return True, False
             return True, False
         
-        elif file_ext == '.rar':
+        elif file_name.endswith('.rar'):
             # 对于 RAR，也尝试用 7z 处理（7z 可以处理 rar）
             result = subprocess.run(
                 ['7z', 'l', file_path],
@@ -119,6 +120,9 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 text=True,
                 timeout=10
             )
+        elif file_name.endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
+            # tar 系列通常不支持加密检测，视为普通压缩包
+            return True, False
             if result.returncode != 0:
                 return True, True
             if 'password' in result.stderr.lower() or 'encrypted' in result.stderr.lower():
@@ -140,19 +144,27 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
     返回: (成功, 消息)
     """
     try:
-        file_ext = Path(file_path).suffix.lower()
+        file_name = Path(file_path).name.lower()
         cmd = []
-        
-        if file_ext in ['.7z', '.rar']:
-            # 使用 7z 处理 7z 和 rar
+
+        # 7z / rar
+        if file_name.endswith(('.7z', '.rar')):
             cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}']
             if password:
                 cmd.insert(3, f'-p{password}')
-        elif file_ext == '.zip':
+        # zip
+        elif file_name.endswith('.zip'):
             if password:
                 cmd = ['unzip', '-P', password, '-o', file_path, '-d', extract_dir]
             else:
                 cmd = ['unzip', '-o', file_path, '-d', extract_dir]
+        # tar 系列
+        elif file_name.endswith('.tar'):
+            cmd = ['tar', '-xf', file_path, '-C', extract_dir]
+        elif file_name.endswith(('.tar.gz', '.tgz')):
+            cmd = ['tar', '-xzf', file_path, '-C', extract_dir]
+        elif file_name.endswith(('.tar.bz2', '.tbz2')):
+            cmd = ['tar', '-xjf', file_path, '-C', extract_dir]
         else:
             return False, f"不支持的格式: {file_ext}"
         
@@ -207,10 +219,11 @@ def find_all_archives(root_dir: str) -> List[str]:
     
     try:
         # 递归遍历所有文件
+        supported_exts = ('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')
         for archive_file in root_path.rglob('*'):
             try:
-                # 检查是否是文件且是支持的格式
-                if archive_file.is_file() and archive_file.suffix.lower() in ['.7z', '.rar', '.zip']:
+                # 检查是否是文件且是支持的格式（使用文件名后缀匹配以适配复合后缀）
+                if archive_file.is_file() and archive_file.name.lower().endswith(supported_exts):
                     archives.append(str(archive_file))
             except (OSError, PermissionError) as e:
                 # 跳过无法访问的文件，但记录日志
@@ -225,7 +238,7 @@ def find_all_archives(root_dir: str) -> List[str]:
                 dirnames[:] = [d for d in dirnames if os.path.exists(os.path.join(dirpath, d))]
                 
                 for filename in filenames:
-                    if filename.lower().endswith(('.7z', '.rar', '.zip')):
+                    if filename.lower().endswith(('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
                         file_path = os.path.join(dirpath, filename)
                         try:
                             if os.path.isfile(file_path):
@@ -260,12 +273,17 @@ def scan_subdirectories(root_dir: str) -> Dict[str, int]:
                         archive_count += len(list(item.rglob('*.7z')))
                         archive_count += len(list(item.rglob('*.rar')))
                         archive_count += len(list(item.rglob('*.zip')))
+                        archive_count += len(list(item.rglob('*.tar')))
+                        archive_count += len(list(item.rglob('*.tar.gz')))
+                        archive_count += len(list(item.rglob('*.tgz')))
+                        archive_count += len(list(item.rglob('*.tar.bz2')))
+                        archive_count += len(list(item.rglob('*.tbz2')))
                     except (OSError, PermissionError):
                         # 如果 rglob 失败，尝试 os.walk
                         for dirpath, dirnames, filenames in os.walk(str(item)):
                             for filename in filenames:
-                                if filename.lower().endswith(('.7z', '.rar', '.zip')):
-                                    archive_count += 1
+                                    if filename.lower().endswith(('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
+                                        archive_count += 1
                     
                     if archive_count > 0:
                         subdir_stats[item.name] = archive_count
@@ -462,7 +480,7 @@ def get_config():
         'password_dict_size': len(PASSWORD_DICT),
         'password_cache_size': len(PASSWORD_SUCCESS_CACHE),
         'default_mount': '/vol1/1000/Temp',
-        'supported_formats': ['.7z', '.rar', '.zip']
+        'supported_formats': ['.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2']
     })
 
 @app.route('/api/subdirs', methods=['POST'])
