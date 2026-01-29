@@ -197,9 +197,43 @@ def find_all_archives(root_dir: str) -> List[str]:
     archives = []
     root_path = Path(root_dir)
     
-    for archive_file in root_path.rglob('*'):
-        if archive_file.is_file() and archive_file.suffix.lower() in ['.7z', '.rar', '.zip']:
-            archives.append(str(archive_file))
+    if not root_path.exists():
+        logger.error(f"目录不存在: {root_dir}")
+        return archives
+    
+    if not root_path.is_dir():
+        logger.error(f"路径不是目录: {root_dir}")
+        return archives
+    
+    try:
+        # 递归遍历所有文件
+        for archive_file in root_path.rglob('*'):
+            try:
+                # 检查是否是文件且是支持的格式
+                if archive_file.is_file() and archive_file.suffix.lower() in ['.7z', '.rar', '.zip']:
+                    archives.append(str(archive_file))
+            except (OSError, PermissionError) as e:
+                # 跳过无法访问的文件，但记录日志
+                logger.debug(f"无法访问文件 {archive_file}: {e}")
+                continue
+    except (OSError, PermissionError) as e:
+        logger.error(f"扫描目录时出错 {root_dir}: {e}")
+        # 尝试使用 os.walk 作为备选方案
+        try:
+            for dirpath, dirnames, filenames in os.walk(root_dir):
+                # 过滤掉无法访问的目录
+                dirnames[:] = [d for d in dirnames if os.path.exists(os.path.join(dirpath, d))]
+                
+                for filename in filenames:
+                    if filename.lower().endswith(('.7z', '.rar', '.zip')):
+                        file_path = os.path.join(dirpath, filename)
+                        try:
+                            if os.path.isfile(file_path):
+                                archives.append(file_path)
+                        except (OSError, PermissionError):
+                            continue
+        except (OSError, PermissionError) as e2:
+            logger.error(f"os.walk 备选方案也失败 {root_dir}: {e2}")
     
     return sorted(archives)
 
@@ -209,17 +243,36 @@ def scan_subdirectories(root_dir: str) -> Dict[str, int]:
     subdir_stats = {}
     
     if not root_path.exists():
+        logger.warning(f"目录不存在: {root_dir}")
+        return subdir_stats
+    
+    if not root_path.is_dir():
+        logger.warning(f"路径不是目录: {root_dir}")
         return subdir_stats
     
     try:
         for item in root_path.iterdir():
-            if item.is_dir():
-                archive_count = len(list(item.rglob('*.7z'))) + \
-                               len(list(item.rglob('*.rar'))) + \
-                               len(list(item.rglob('*.zip')))
-                if archive_count > 0:
-                    subdir_stats[item.name] = archive_count
-    except Exception as e:
+            try:
+                if item.is_dir():
+                    # 计算该目录中的压缩包数量
+                    archive_count = 0
+                    try:
+                        archive_count += len(list(item.rglob('*.7z')))
+                        archive_count += len(list(item.rglob('*.rar')))
+                        archive_count += len(list(item.rglob('*.zip')))
+                    except (OSError, PermissionError):
+                        # 如果 rglob 失败，尝试 os.walk
+                        for dirpath, dirnames, filenames in os.walk(str(item)):
+                            for filename in filenames:
+                                if filename.lower().endswith(('.7z', '.rar', '.zip')):
+                                    archive_count += 1
+                    
+                    if archive_count > 0:
+                        subdir_stats[item.name] = archive_count
+            except (OSError, PermissionError) as e:
+                logger.debug(f"无法访问子目录 {item}: {e}")
+                continue
+    except (OSError, PermissionError) as e:
         logger.warning(f"扫描子目录失败: {e}")
     
     return subdir_stats
@@ -305,27 +358,57 @@ def index():
 def scan_directory():
     """扫描目录"""
     data = request.get_json()
-    root_dir = data.get('path', '/volume1/downloads')
+    root_dir = data.get('path', '/vol1/1000/Temp')
+    
+    logger.info(f"开始扫描目录: {root_dir}")
     
     # 验证目录存在
-    if not Path(root_dir).exists():
+    root_path = Path(root_dir)
+    if not root_path.exists():
+        logger.error(f"目录不存在: {root_dir}")
         return jsonify({'error': f'目录不存在: {root_dir}'}), 400
     
-    archives = find_all_archives(root_dir)
-    subdir_stats = scan_subdirectories(root_dir)
+    if not root_path.is_dir():
+        logger.error(f"路径不是目录: {root_dir}")
+        return jsonify({'error': f'路径不是目录: {root_dir}'}), 400
+    
+    # 检查目录的读取权限
+    if not os.access(root_dir, os.R_OK):
+        logger.error(f"没有目录读取权限: {root_dir}")
+        return jsonify({'error': f'没有目录读取权限: {root_dir}'}), 403
+    
+    try:
+        archives = find_all_archives(root_dir)
+        logger.info(f"扫描完成，发现 {len(archives)} 个压缩包")
+    except Exception as e:
+        logger.error(f"扫描压缩包时出错: {e}")
+        return jsonify({'error': f'扫描文件时出错: {str(e)}'}), 500
+    
+    try:
+        subdir_stats = scan_subdirectories(root_dir)
+    except Exception as e:
+        logger.error(f"扫描子目录时出错: {e}")
+        subdir_stats = {}
     
     # 分析每个压缩包
     result = []
     for archive in archives:
-        is_arch, is_enc = is_archive_encrypted(archive)
-        result.append({
-            'path': archive,
-            'name': Path(archive).name,
-            'size': Path(archive).stat().st_size,
-            'encrypted': is_enc if is_arch else None,
-            'status': 'ready',
-            'cached': archive in PASSWORD_SUCCESS_CACHE
-        })
+        try:
+            is_arch, is_enc = is_archive_encrypted(archive)
+            result.append({
+                'path': archive,
+                'name': Path(archive).name,
+                'size': Path(archive).stat().st_size,
+                'encrypted': is_enc if is_arch else None,
+                'status': 'ready',
+                'cached': archive in PASSWORD_SUCCESS_CACHE
+            })
+        except (OSError, PermissionError) as e:
+            logger.warning(f"无法访问压缩包 {archive}: {e}")
+            continue
+        except Exception as e:
+            logger.warning(f"处理压缩包 {archive} 时出错: {e}")
+            continue
     
     return jsonify({
         'total': len(result),
@@ -339,7 +422,7 @@ def extract():
     """开始批量解压"""
     data = request.get_json()
     archives = data.get('archives', [])
-    extract_base = data.get('extract_to', '/volume1/downloads')
+    extract_base = data.get('extract_to', '/vol1/1000/Temp')
     
     if not archives:
         return jsonify({'error': '没有选择任何文件'}), 400
@@ -378,7 +461,7 @@ def get_config():
     return jsonify({
         'password_dict_size': len(PASSWORD_DICT),
         'password_cache_size': len(PASSWORD_SUCCESS_CACHE),
-        'default_mount': '/volume1/downloads',
+        'default_mount': '/vol1/1000/Temp',
         'supported_formats': ['.7z', '.rar', '.zip']
     })
 
@@ -386,7 +469,7 @@ def get_config():
 def scan_subdirs():
     """扫描子目录中的压缩包"""
     data = request.get_json()
-    root_dir = data.get('path', '/volume1/downloads')
+    root_dir = data.get('path', '/vol1/1000/Temp')
     
     if not Path(root_dir).exists():
         return jsonify({'error': f'目录不存在: {root_dir}'}), 400

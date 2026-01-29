@@ -488,7 +488,7 @@
             <div class="section">
                 <div class="section-title">扫描设置</div>
                 <div class="input-group">
-                    <input type="text" id="scanPath" placeholder="输入目录路径 (如: /volume1/downloads)" value="/volume1/downloads">
+                    <input type="text" id="scanPath" placeholder="输入目录路径 (如: /vol1/1000/Temp)" value="/vol1/1000/Temp">
                     <button class="btn-primary" onclick="scanDirectory()">🔍 扫描</button>
                     <button class="btn-secondary" onclick="openSettingsModal()">⚙️ 设置</button>
                 </div>
@@ -535,7 +535,7 @@
             <div class="section" id="extractSection" style="display: none;">
                 <div class="section-title">解压设置</div>
                 <div class="input-group">
-                    <input type="text" id="extractPath" placeholder="解压目录" value="/volume1/downloads/extracted">
+                    <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
                 </div>
             </div>
 
@@ -587,8 +587,8 @@
                 <div class="modal-body">
                     <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">常用目录</h3>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <button class="btn-secondary" onclick="setDefaultDir('/volume1/downloads')" style="text-align: left;">
-                            📂 /volume1/downloads
+                        <button class="btn-secondary" onclick="setDefaultDir('/vol1/1000/Temp')" style="text-align: left;">
+                            📂 /vol1/1000/Temp
                         </button>
                         <button class="btn-secondary" onclick="setDefaultDir('/home')" style="text-align: left;">
                             📂 /home
@@ -602,7 +602,7 @@
                         </div>
                     </div>
                     <p style="margin-top: 15px; font-size: 12px; color: #999;">
-                        当前目录: <strong id="currentDirText">/volume1/downloads</strong>
+                        当前目录: <strong id="currentDirText">/vol1/1000/Temp</strong>
                     </p>
                 </div>
             </div>
@@ -648,7 +648,7 @@
     <script>
         let archives = [];
         let currentTask = null;
-        let currentPath = '/volume1/downloads';
+        let currentPath = '/vol1/1000/Temp';
 
         // ===== 模态框管理 =====
         function openSettingsModal() {
@@ -872,7 +872,7 @@
                 return;
             }
 
-            const extractTo = document.getElementById('extractPath').value.trim() || '/volume1/downloads';
+            const extractTo = document.getElementById('extractPath').value.trim() || '/vol1/1000/Temp';
 
             document.getElementById('listSection').style.display = 'none';
             document.getElementById('actionSection').style.display = 'none';

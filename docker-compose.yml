@@ -8,7 +8,7 @@ services:
       - "5000:5000"
     volumes:
       # 挂载下载目录
-      - /volume1/downloads:/volume1/downloads
+      - /vol1/1000/Temp:/vol1/1000/Temp
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
