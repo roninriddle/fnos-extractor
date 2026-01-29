@@ -534,18 +534,22 @@
             <!-- 提取路径 -->
             <div class="section" id="extractSection" style="display: none;">
                 <div class="section-title">解压设置</div>
-                <div class="input-group">
+                <div class="input-group" style="margin-bottom: 0;">
                     <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
                 </div>
-                
-                <!-- 解压选项 -->
                 <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
-                    <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
-                        <input type="checkbox" id="extractToSameName" style="margin-right: 8px; cursor: pointer;">
-                        <span style="color: #333; font-size: 14px;">📁 解压到同名文件夹</span>
-                    </label>
-                    <small style="color: #999; margin-left: 24px; display: block;">勾选后，每个压缩包将解压到与其同名的文件夹（忽略扩展名）</small>
-                    
+                    <div style="margin-bottom: 10px;">
+                        <label style="margin-right: 18px; cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;">解压到当前文件夹
+                        </label>
+                        <label style="margin-right: 18px; cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;">解压到同名文件夹
+                        </label>
+                        <label style="cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked>解压到指定目录
+                        </label>
+                    </div>
+                    <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
                     <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
                         <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
                         <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
@@ -964,8 +968,10 @@
             }
 
             const extractTo = document.getElementById('extractPath').value.trim() || '/vol1/1000/Temp';
-            const extractToSameName = document.getElementById('extractToSameName').checked;
             const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
+            let extractMode = 'to_specified';
+            if (document.getElementById('modeCurrent').checked) extractMode = 'to_current';
+            else if (document.getElementById('modeSameName').checked) extractMode = 'to_same_name';
 
             document.getElementById('listSection').style.display = 'none';
             document.getElementById('actionSection').style.display = 'none';
@@ -981,7 +987,7 @@
                     body: JSON.stringify({ 
                         archives: selected, 
                         extract_to: extractTo,
-                        extract_to_same_name: extractToSameName,
+                        extract_mode: extractMode,
                         auto_delete_success: autoDeleteSuccess
                     })
                 });
@@ -991,13 +997,11 @@
                 try {
                     data = JSON.parse(text);
                 } catch (err) {
-                    // 不是合法 JSON（可能是 HTML 错误页）— 显示原文以便排查
                     alert('启动解压失败: ' + text);
                     return;
                 }
 
                 currentTask = data;
-
                 monitorProgress();
             } catch (e) {
                 alert('启动解压失败: ' + e.message);

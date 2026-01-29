@@ -2,9 +2,8 @@ name: Build and publish Docker image
 
 on:
   push:
-    branches: [ main ]
-  release:
-    types: [published]
+    tags:
+      - 'v*'
 
 jobs:
   build-and-push:
@@ -26,11 +25,17 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Extract version
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
           tags: |
-             roninriddle/fnos-extractor:1.1.5
-            roninriddle/fnos-extractor:latest
+            ronin/fnos-extractor:${{ steps.get_version.outputs.version }}
+            ronin/fnos-extractor:latest

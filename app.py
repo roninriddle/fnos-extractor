@@ -85,31 +85,44 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
 
         # 支持 7z/zip/rar 以及 tar 系列
         if file_name.endswith('.7z'):
-            # 使用 7z 的 -y 参数自动确认，避免交互式提示
-            result = subprocess.run(
-                ['7z', 'l', '-y', file_path],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            # 检查命令返回码和输出内容
-            output = (result.stdout + result.stderr).lower()
-            
-            # 如果返回非零且输出中含有密码/加密提示，则为加密
-            if result.returncode != 0:
-                if 'password' in output or 'encrypted' in output or 'wrong password' in output:
-                    logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
+            # 先用7z l检测
+            try:
+                result = subprocess.run(
+                    ['7z', 'l', '-y', file_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                output = (result.stdout + result.stderr).lower()
+                # 7z返回非零，且输出有加密提示
+                if result.returncode != 0:
+                    if 'password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output:
+                        logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
+                        return True, True
+                    logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
+                # 输出有加密提示
+                if 'password' in output or 'encrypted' in output or 'lock' in output or 'can not open encrypted archive' in output:
+                    logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
                     return True, True
-                # 返回非零但没有明确提示，可能是其他错误
-                logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
-            
-            # 检查输出中的加密标志
-            if 'password' in output or 'encrypted' in output or 'lock' in output:
-                logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
-                return True, True
-            
-            logger.debug(f"7z 文件检测为无加密: {file_path}")
-            return True, False
+                logger.debug(f"7z 文件检测为无加密: {file_path}")
+                return True, False
+            except Exception as e:
+                # 7z命令本身失败，尝试用7z t检测
+                logger.warning(f"7z l 检测异常，尝试7z t: {e}")
+                try:
+                    result = subprocess.run(
+                        ['7z', 't', '-y', file_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    output = (result.stdout + result.stderr).lower()
+                    if result.returncode != 0 and ('password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output):
+                        logger.debug(f"7z t 检测为加密: {file_path}")
+                        return True, True
+                except Exception as e2:
+                    logger.error(f"7z t 检测也失败: {e2}")
+                return False, None
             
         elif file_name.endswith('.zip'):
             result = subprocess.run(
@@ -543,6 +556,7 @@ def extract():
 
         archives = data.get('archives', [])
         extract_base = data.get('extract_to', '/vol1/1000/Temp')
+        extract_mode = data.get('extract_mode', 'to_specified')  # 新增参数: to_current, to_same_name, to_specified
         extract_to_same_name = data.get('extract_to_same_name', False)
         auto_delete_success = data.get('auto_delete_success', False)
 
@@ -553,6 +567,7 @@ def extract():
         global extraction_options
         extraction_options['extract_to_same_name'] = extract_to_same_name
         extraction_options['auto_delete_success'] = auto_delete_success
+        extraction_options['extract_mode'] = extract_mode
 
         # 确保解压基目录存在
         try:
@@ -561,18 +576,26 @@ def extract():
             logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
             return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
 
-        # 如果启用了"解压到同名文件夹"，则不创建临时目录，而是逐个创建同名文件夹
-        if extract_to_same_name:
-            extract_dir = extract_base
-        else:
-            extract_dir = tempfile.mkdtemp(dir=extract_base)
-
         tasks = {}
         for i, archive in enumerate(archives):
             task_id = f"task_{i}"
             tasks[task_id] = archive
 
-            # 启动后台线程
+            # 计算实际解压目录
+            if extract_mode == 'to_current':
+                extract_dir = str(Path(archive).parent)
+            elif extract_mode == 'to_same_name':
+                archive_name = os.path.basename(archive)
+                base_name = archive_name
+                for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
+                    if base_name.lower().endswith(ext):
+                        base_name = base_name[:-len(ext)]
+                        break
+                extract_dir = os.path.join(extract_base, base_name)
+                os.makedirs(extract_dir, exist_ok=True)
+            else:
+                extract_dir = extract_base
+
             thread = threading.Thread(
                 target=process_extraction_task,
                 args=(task_id, archive, extract_dir)
@@ -580,14 +603,14 @@ def extract():
             thread.daemon = True
             thread.start()
 
-        logger.info(f"启动解压: {len(archives)} 个文件，选项: 同名文件夹={extract_to_same_name}, 自动删除={auto_delete_success}")
+        logger.info(f"启动解压: {len(archives)} 个文件，extract_mode={extract_mode}, 自动删除={auto_delete_success}")
 
         return jsonify({
-            'extract_dir': extract_dir,
+            'extract_dir': extract_base,
             'task_count': len(tasks),
             'tasks': tasks,
             'options': {
-                'extract_to_same_name': extract_to_same_name,
+                'extract_mode': extract_mode,
                 'auto_delete_success': auto_delete_success
             }
         })
