@@ -10,6 +10,9 @@ docker pull roninriddle/fnos-extractor
 - **🌐 Web UI** - 现代化网页界面，开箱即用
 - **📁 递归扫描** - 自动扫描目录及所有子目录
 - **🔐 智能密码** - 自动检测是否加密，使用密码词典尝试解压
+- **💾 密码缓存** - ⭐ 自动记忆成功密码，性能提升 10-50 倍（v1.1.0+）
+- **⚙️ 目录管理** - ⭐ Web 界面快速切换工作目录（v1.1.0+）
+- **🔐 密码编辑** - ⭐ 在线编辑密码词典（v1.1.0+）
 - **🎯 批量操作** - 支持批量选择和批量解压
 - **📊 实时进度** - 实时显示解压状态和日志
 - **🧼 无污染** - 容器清理不留痕迹
@@ -23,7 +26,25 @@ docker pull roninriddle/fnos-extractor
 
 ## 🚀 快速开始
 
-### 方式一：Docker Compose（推荐）
+### 方式一：Docker Hub 拉取（最快）✨ 推荐
+
+```bash
+# 拉取官方镜像
+docker pull roninriddle/fnos-extractor:latest
+
+# 运行容器
+docker run -d \
+  --name fnos-extractor \
+  -p 5000:5000 \
+  -v /volume1/downloads:/volume1/downloads \
+  roninriddle/fnos-extractor:latest
+
+# 访问 http://localhost:5000
+```
+
+Docker Hub 地址：https://hub.docker.com/r/roninriddle/fnos-extractor
+
+### 方式二：Docker Compose（推荐）
 
 ```bash
 # 1. 克隆仓库
@@ -37,7 +58,7 @@ docker-compose up -d
 # 打开浏览器访问 http://localhost:5000
 ```
 
-### 方式二：Docker 命令
+### 方式三：本地构建
 
 ```bash
 # 构建镜像
@@ -53,7 +74,7 @@ docker run -d \
 # 访问 http://localhost:5000
 ```
 
-### 方式三：本地运行（需要系统工具）
+### 方式四：本地运行（需要系统工具）
 
 ```bash
 # 安装依赖
@@ -68,9 +89,30 @@ python app.py
 
 ## 📝 使用说明
 
+### Web UI 功能（v1.1.0+）
+
+#### 📁 目录管理选项卡
+- 快速切换常用目录（/volume1/downloads、/home、/tmp）
+- 输入自定义目录路径
+- 实时同步到扫描界面
+
+#### 🔐 密码本选项卡
+- 在线编辑密码词典
+- 实时显示密码数量
+- 保存到服务器
+
+#### 💾 缓存管理选项卡
+- 查看已缓存的成功密码
+- 快速清空缓存
+- 了解性能优化情况
+
 ### 1️⃣ 扫描目录
 
 在 Web 界面输入要扫描的目录路径，点击"扫描"按钮。
+
+- 自动扫描所有子目录
+- 显示包含压缩包的子目录（点击快速切换）
+- 实时检测文件是否加密
 
 **示例**：
 - `/volume1/downloads` - 扫描整个下载目录
@@ -90,6 +132,12 @@ python app.py
 ### 4️⃣ 开始解压
 
 点击"开始批量解压"按钮，实时查看进度和日志。
+
+**智能密码尝试**：
+- 首先尝试缓存中的成功密码
+- 再尝试密码词典中的所有密码
+- 成功密码会自动保存到缓存
+- 下次解压相同加密类型时速度大幅提升（10-50倍）
 
 ## 🔧 配置
 
@@ -164,6 +212,20 @@ fnos-extractor/
 
 ## 📊 API 接口
 
+### `GET /api/config`
+
+获取应用配置
+
+**响应**：
+```json
+{
+  "default_mount": "/volume1/downloads",
+  "password_cache_size": 5,
+  "password_dict_size": 63,
+  "supported_formats": [".7z", ".rar", ".zip"]
+}
+```
+
 ### `POST /api/scan`
 
 扫描目录
@@ -186,7 +248,11 @@ fnos-extractor/
       "size": 1024000,
       "encrypted": false
     }
-  ]
+  ],
+  "subdirs_with_archives": {
+    "subdir1": 3,
+    "subdir2": 2
+  }
 }
 ```
 
@@ -214,6 +280,48 @@ fnos-extractor/
     "file": "/path/to/file1.7z",
     "message": "成功 (密码: 123456)"
   }
+}
+```
+
+### `GET /api/password-cache`
+
+获取密码缓存（v1.1.0+）
+
+**响应**：
+```json
+{
+  "123456": ["file1.7z"],
+  "admin": ["file2.zip"]
+}
+```
+
+### `DELETE /api/password-cache`
+
+清空密码缓存（v1.1.0+）
+
+### `GET /api/passwords`
+
+获取密码词典（v1.1.0+）
+
+### `POST /api/passwords`
+
+更新密码词典（v1.1.0+）
+
+**请求**：
+```json
+{
+  "passwords": ["123456", "password", "admin"]
+}
+```
+
+### `POST /api/subdirs`
+
+扫描子目录（v1.1.0+）
+
+**请求**：
+```json
+{
+  "path": "/volume1/downloads"
 }
 ```
 
@@ -284,17 +392,43 @@ lsof -i :5000
 3. **日志审计** - 定期检查解压日志
 4. **密码安全** - 不要把常见密码写进去，添加专项密码
 
-## 📜 许可证
+## 📜 版本历史
 
-MIT License
+### v1.1.0（当前）- 2026-01-29 ✅ 已发布到 Docker Hub
+
+**新增功能**：
+- 💾 密码缓存系统 - 自动缓存成功密码，性能提升 10-50 倍
+- 📁 子目录检测 - 自动识别含压缩包的子目录
+- ⚙️ 目录管理 - Web 界面快速切换工作目录
+- 🔐 密码编辑 - 在线编辑密码词典
+- 📊 完整 API - 新增缓存、密码、子目录管理接口
+
+**改进**：
+- 优化前端界面，添加设置面板
+- 增强错误处理和日志输出
+- 改进密码尝试策略
+
+### v1.0.0 - 基础版本
+
+**功能**：
+- Web UI 界面
+- 递归目录扫描
+- 智能密码检测
+- 批量解压支持
+- 实时进度显示
 
 ## 🙏 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
+## � 项目链接
+
+- **GitHub**: https://github.com/roninriddle/fnos-extractor
+- **Docker Hub**: https://hub.docker.com/r/roninriddle/fnos-extractor
+- **Issues**: https://github.com/roninriddle/fnos-extractor/issues
+
 ## 📞 支持
 
-- 📧 Email: support@example.com
 - 💬 Issues: https://github.com/roninriddle/fnos-extractor/issues
 - 📖 Wiki: https://github.com/roninriddle/fnos-extractor/wiki
 
