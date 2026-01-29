@@ -27,18 +27,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract version
-        id: get_version
+      - name: Set image tags
+        id: meta
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "tags=roninriddle/fnos-extractor:$VERSION,roninriddle/fnos-extractor:latest" >> $GITHUB_OUTPUT
+          else
+            echo "tags=roninriddle/fnos-extractor:latest" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
-          tags: |
-            roninriddle/fnos-extractor:${{ steps.get_version.outputs.version }}
-            roninriddle/fnos-extractor:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          no-default-tags: true
             roninriddle/fnos-extractor:latest
