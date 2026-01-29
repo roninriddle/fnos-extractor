@@ -534,20 +534,20 @@
             <!-- 提取路径 -->
             <div class="section" id="extractSection" style="display: none;">
                 <div class="section-title">解压设置</div>
-                <div class="input-group" style="margin-bottom: 0;">
-                    <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
-                </div>
                 <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
                     <div style="margin-bottom: 10px;">
                         <label style="margin-right: 18px; cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;">解压到当前文件夹
+                            <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到当前文件夹
                         </label>
                         <label style="margin-right: 18px; cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;">解压到同名文件夹
+                            <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到同名文件夹
                         </label>
                         <label style="cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked>解压到指定目录
+                            <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked onchange="toggleExtractPath()">解压到指定目录
                         </label>
+                    </div>
+                    <div id="extractPathGroup" class="input-group" style="margin-bottom: 0; margin-top: 10px;">
+                        <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
                     </div>
                     <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
                     <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
@@ -673,6 +673,20 @@
     </div>
 
     <script>
+                // 解压路径输入框联动
+                function toggleExtractPath() {
+                    const group = document.getElementById('extractPathGroup');
+                    if (document.getElementById('modeSpecified').checked) {
+                        group.style.display = '';
+                    } else {
+                        group.style.display = 'none';
+                    }
+                }
+                // 页面加载时初始化一次
+                document.addEventListener('DOMContentLoaded', () => {
+                    toggleExtractPath();
+                    document.getElementById('scanPath').focus();
+                });
         let archives = [];
         let currentTask = null;
         let currentPath = '/vol1/1000/Temp';

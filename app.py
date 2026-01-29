@@ -176,6 +176,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
             
     except subprocess.TimeoutExpired:
         logger.warning(f"检测加密状态超时: {file_path}")
+        # 超时时返回“无法判断加密状态”，不报错，后续流程可继续
         return True, None
     except Exception as e:
         logger.error(f"检测加密状态出错 {file_path}: {e}")
