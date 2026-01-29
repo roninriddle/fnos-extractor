@@ -181,28 +181,51 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
     except Exception as e:
         return False, f"解压异常: {str(e)}"
 
-def extract_with_password_dict(file_path: str, extract_dir: str) -> Tuple[bool, str, Optional[str]]:
+def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_sec: int = 60) -> Tuple[bool, str, Optional[str]]:
     """
     使用密码词典尝试解压
+    支持重试次数和超时控制
     返回: (成功, 消息, 使用的密码)
     """
+    import time
+    start_time = time.time()
+    retry_count = 0
+    
     # 检查缓存
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
         success, msg = extract_archive(file_path, extract_dir, cached_pwd)
         if success:
             return True, "解压成功 (缓存密码)", cached_pwd
+        retry_count += 1
+        logger.warning(f"缓存密码失败 {file_path}: {msg}，将尝试词典密码")
     
-    # 尝试词典中的密码
-    for password in PASSWORD_DICT:
-        success, msg = extract_archive(file_path, extract_dir, password)
-        if success:
-            # 保存到缓存
-            PASSWORD_SUCCESS_CACHE[file_path] = password
-            save_password_cache()
-            return True, "解压成功", password
+    # 尝试词典中的密码，支持重试和超时
+    for attempt in range(min(len(PASSWORD_DICT), max_retries)):
+        # 检查超时
+        elapsed = time.time() - start_time
+        if elapsed > timeout_sec:
+            logger.error(f"解压超时 ({timeout_sec}s): {file_path}")
+            return False, f"解压超时 (已尝试 {attempt+1} 个密码，耗时 {int(elapsed)}s)", None
+        
+        password = PASSWORD_DICT[attempt]
+        try:
+            success, msg = extract_archive(file_path, extract_dir, password)
+            if success:
+                # 保存到缓存
+                PASSWORD_SUCCESS_CACHE[file_path] = password
+                save_password_cache()
+                logger.info(f"成功解压 {file_path} (尝试次数: {attempt+1})")
+                return True, "解压成功", password
+        except Exception as e:
+            logger.warning(f"解压异常 {file_path} (尝试 {attempt+1}): {e}")
+            continue
+        
+        retry_count += 1
     
-    return False, "所有密码都失败了", None
+    elapsed = time.time() - start_time
+    logger.error(f"所有密码都失败了 {file_path} (尝试次数: {retry_count}, 耗时: {int(elapsed)}s)")
+    return False, f"所有密码都失败了 (尝试 {retry_count} 个密码，耗时 {int(elapsed)}s)", None
 
 def find_all_archives(root_dir: str) -> List[str]:
     """递归查找所有压缩包"""
@@ -321,9 +344,10 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
         # 尝试解压
         if is_encrypted:
             with extraction_lock:
-                extraction_status[task_id]['message'] = '需要密码，正在尝试...'
+                extraction_status[task_id]['message'] = '需要密码，正在尝试... (限制: 5次重试/60秒超时)'
             
-            success, msg, used_pwd = extract_with_password_dict(archive_file, extract_dir)
+            # 有重试次数限制和超时控制
+            success, msg, used_pwd = extract_with_password_dict(archive_file, extract_dir, max_retries=5, timeout_sec=60)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
@@ -339,6 +363,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                         'file': archive_file,
                         'message': msg
                     }
+                logger.error(f"密码解压失败 {archive_file}: {msg}")
         else:
             with extraction_lock:
                 extraction_status[task_id]['message'] = '无加密，正在解压...'
@@ -358,6 +383,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                         'file': archive_file,
                         'message': msg
                     }
+                logger.error(f"解压失败 {archive_file}: {msg}")
     
     except Exception as e:
         with extraction_lock:
@@ -366,6 +392,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                 'file': archive_file,
                 'message': f"错误: {str(e)}"
             }
+        logger.exception(f"处理解压任务异常 {archive_file}: {e}")
 
 # Web 路由
 @app.route('/')

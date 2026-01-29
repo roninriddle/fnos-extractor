@@ -1,8 +1,8 @@
-# Docker Hub 推送指南 - v1.1.2
+# Docker Hub 推送指南 - v1.1.3
 
 ## 📋 概述
 
-本文档说明如何将 FNOS 批量解压工具 v1.1.2 构建并推送到 Docker Hub。
+本文档说明如何将 FNOS 批量解压工具 v1.1.3 构建并推送到 Docker Hub。
 
 ## 🔧 前提条件
 
