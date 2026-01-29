@@ -37,5 +37,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ronin/fnos-extractor:${{ steps.get_version.outputs.version }}
-            ronin/fnos-extractor:latest
+            roninriddle/fnos-extractor:${{ steps.get_version.outputs.version }}
+            roninriddle/fnos-extractor:latest
+            roninriddle/fnos-extractor:latest
