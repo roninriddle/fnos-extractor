@@ -559,6 +559,14 @@
                     </div>
                 </div>
                 <div class="task-log" id="taskLog"></div>
+                
+                <!-- 控制按钮 -->
+                <div class="controls" style="margin-top: 20px;">
+                    <button class="btn-secondary" id="pauseBtn" onclick="pauseExtraction()" style="flex: 1;">⏸️ 暂停</button>
+                    <button class="btn-secondary" id="resumeBtn" onclick="resumeExtraction()" style="flex: 1; display: none;">▶️ 继续</button>
+                    <button class="btn-danger" onclick="stopExtraction()" style="flex: 1;">⏹️ 停止</button>
+                    <button class="btn-secondary" onclick="showLogs()" style="flex: 1;">📋 日志</button>
+                </div>
             </div>
 
             <!-- 空状态 -->
@@ -868,6 +876,68 @@
             updateStats();
         }
 
+        // ===== 解压控制 =====
+        let isPaused = false;
+
+        async function pauseExtraction() {
+            try {
+                const response = await fetch('/api/extraction/pause', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    isPaused = true;
+                    document.getElementById('pauseBtn').style.display = 'none';
+                    document.getElementById('resumeBtn').style.display = 'block';
+                    alert('已暂停解压');
+                }
+            } catch (e) {
+                alert('暂停失败: ' + e.message);
+            }
+        }
+
+        async function resumeExtraction() {
+            try {
+                const response = await fetch('/api/extraction/resume', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    isPaused = false;
+                    document.getElementById('pauseBtn').style.display = 'block';
+                    document.getElementById('resumeBtn').style.display = 'none';
+                    alert('已继续解压');
+                }
+            } catch (e) {
+                alert('继续失败: ' + e.message);
+            }
+        }
+
+        async function stopExtraction() {
+            if (!confirm('确定要停止解压吗？')) return;
+            try {
+                const response = await fetch('/api/extraction/stop', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('已停止解压');
+                    // 重置状态
+                    await fetch('/api/extraction/reset', { method: 'POST' });
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1000);
+                }
+            } catch (e) {
+                alert('停止失败: ' + e.message);
+            }
+        }
+
+        async function showLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                const logText = data.logs || '无日志';
+                alert(logText.substring(0, 2000)); // 显示前 2000 字符
+            } catch (e) {
+                alert('获取日志失败: ' + e.message);
+            }
+        }
+
         // ===== 解压操作 =====
         async function startExtraction() {
             const selected = Array.from(document.querySelectorAll('.archive-checkbox:checked'))
@@ -883,6 +953,9 @@
             document.getElementById('listSection').style.display = 'none';
             document.getElementById('actionSection').style.display = 'none';
             document.getElementById('progressSection').style.display = 'block';
+            document.getElementById('pauseBtn').style.display = 'block';
+            document.getElementById('resumeBtn').style.display = 'none';
+            isPaused = false;
 
             try {
                 const response = await fetch('/api/extract', {

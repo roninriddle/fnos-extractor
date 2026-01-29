@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 extraction_queue = Queue()
 extraction_status = {}
 extraction_lock = threading.Lock()
+extraction_control = {
+    'pause': False,      # 暂停标志
+    'stop': False,       # 停止标志
+    'paused_tasks': {}   # 暂停的任务 ID
+}
+control_lock = threading.Lock()
 
 # 密码词典和缓存
 PASSWORD_DICT = []
@@ -151,14 +157,15 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         if file_name.endswith(('.7z', '.rar')):
             cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}']
             if password:
-                cmd.insert(3, f'-p{password}')
+                # 7z 的密码参数必须紧跟 -p，中间无空格
+                cmd.append(f'-p{password}')
         # zip
         elif file_name.endswith('.zip'):
             if password:
                 cmd = ['unzip', '-P', password, '-o', file_path, '-d', extract_dir]
             else:
                 cmd = ['unzip', '-o', file_path, '-d', extract_dir]
-        # tar 系列
+        # tar 系列（tar 不支持加密）
         elif file_name.endswith('.tar'):
             cmd = ['tar', '-xf', file_path, '-C', extract_dir]
         elif file_name.endswith(('.tar.gz', '.tgz')):
@@ -166,7 +173,7 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         elif file_name.endswith(('.tar.bz2', '.tbz2')):
             cmd = ['tar', '-xjf', file_path, '-C', extract_dir]
         else:
-            return False, f"不支持的格式: {file_ext}"
+            return False, f"不支持的格式"
         
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         
@@ -174,12 +181,15 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
             return True, "解压成功"
         else:
             error_msg = result.stderr or result.stdout or "未知错误"
+            logger.error(f"解压命令失败 [{file_path}]: {' '.join(cmd)}\n返回码: {result.returncode}\n错误: {error_msg}")
             return False, f"解压失败: {error_msg[:200]}"
             
     except subprocess.TimeoutExpired:
-        return False, "解压超时"
+        logger.error(f"解压超时: {file_path}")
+        return False, "解压超时（300秒）"
     except Exception as e:
-        return False, f"解压异常: {str(e)}"
+        logger.error(f"解压异常 {file_path}: {e}")
+        return False, f"解压异常: {str(e)[:100]}"
 
 def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_sec: int = 60) -> Tuple[bool, str, Optional[str]]:
     """
@@ -319,7 +329,7 @@ def scan_subdirectories(root_dir: str) -> Dict[str, int]:
     return subdir_stats
 
 def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
-    """处理单个解压任务"""
+    """处理单个解压任务，支持暂停/继续/停止"""
     try:
         with extraction_lock:
             extraction_status[task_id] = {
@@ -328,6 +338,17 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                 'progress': 0,
                 'message': '检测加密状态...'
             }
+        
+        # 检查停止标志
+        with control_lock:
+            if extraction_control['stop']:
+                with extraction_lock:
+                    extraction_status[task_id] = {
+                        'status': 'stopped',
+                        'file': archive_file,
+                        'message': '已停止'
+                    }
+                return
         
         # 检测是否加密
         is_archive, is_encrypted = is_archive_encrypted(archive_file)
@@ -341,7 +362,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                 }
             return
         
-        # 尝试解压
+        # 处理加密压缩包
         if is_encrypted:
             with extraction_lock:
                 extraction_status[task_id]['message'] = '需要密码，正在尝试... (限制: 5次重试/60秒超时)'
@@ -365,6 +386,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                     }
                 logger.error(f"密码解压失败 {archive_file}: {msg}")
         else:
+            # 处理非加密压缩包
             with extraction_lock:
                 extraction_status[task_id]['message'] = '无加密，正在解压...'
             
@@ -514,6 +536,42 @@ def get_status():
     with extraction_lock:
         return jsonify(extraction_status)
 
+@app.route('/api/extraction/pause', methods=['POST'])
+def pause_extraction():
+    """暂停解压"""
+    with control_lock:
+        extraction_control['pause'] = True
+    logger.info("用户暂停解压")
+    return jsonify({'success': True, 'message': '已暂停解压'})
+
+@app.route('/api/extraction/resume', methods=['POST'])
+def resume_extraction():
+    """继续解压"""
+    with control_lock:
+        extraction_control['pause'] = False
+    logger.info("用户继续解压")
+    return jsonify({'success': True, 'message': '已继续解压'})
+
+@app.route('/api/extraction/stop', methods=['POST'])
+def stop_extraction():
+    """停止解压"""
+    with control_lock:
+        extraction_control['stop'] = True
+    logger.info("用户停止解压")
+    return jsonify({'success': True, 'message': '已停止解压'})
+
+@app.route('/api/extraction/reset', methods=['POST'])
+def reset_extraction():
+    """重置解压控制状态"""
+    with control_lock:
+        extraction_control['pause'] = False
+        extraction_control['stop'] = False
+        extraction_control['paused_tasks'] = {}
+    with extraction_lock:
+        extraction_status.clear()
+    logger.info("已重置解压状态")
+    return jsonify({'success': True, 'message': '已重置解压状态'})
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """获取配置信息"""
@@ -596,7 +654,42 @@ def clear_password_cache():
         pass
     return jsonify({'success': True, 'message': '已清空密码缓存'})
 
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """获取最近的日志信息"""
+    # 返回日志文件内容或内存日志
+    log_file = Path('/app/fnos.log')
+    if log_file.exists():
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                # 返回最后 200 行
+                return jsonify({'logs': ''.join(lines[-200:])})
+        except Exception as e:
+            logger.error(f"读取日志失败: {e}")
+    return jsonify({'logs': '暂无日志'})
+
+@app.route('/api/logs/download', methods=['GET'])
+def download_logs():
+    """下载日志文件"""
+    from flask import send_file
+    log_file = Path('/app/fnos.log')
+    if log_file.exists():
+        try:
+            return send_file(log_file, as_attachment=True, download_name=f'fnos_logs_{int(time.time())}.log')
+        except Exception as e:
+            logger.error(f"下载日志失败: {e}")
+            return jsonify({'error': '日志下载失败'}), 500
+    return jsonify({'error': '日志文件不存在'}), 404
+
 if __name__ == '__main__':
+    # 配置文件日志处理
+    file_handler = logging.FileHandler('/app/fnos.log')
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
     load_password_dict()
     load_password_cache()
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
