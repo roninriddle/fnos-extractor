@@ -33,6 +33,10 @@ extraction_control = {
     'stop': False,       # 停止标志
     'paused_tasks': {}   # 暂停的任务 ID
 }
+extraction_options = {
+    'extract_to_same_name': False,  # 解压到同名文件夹
+    'auto_delete_success': False     # 自动删除成功的压缩包
+}
 control_lock = threading.Lock()
 
 # 密码词典和缓存
@@ -381,6 +385,20 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                     }
                 return
         
+        # 确定实际的解压目录
+        actual_extract_dir = extract_dir
+        if extraction_options.get('extract_to_same_name', False):
+            # 从文件名获取同名文件夹
+            archive_name = os.path.basename(archive_file)
+            # 移除扩展名获取文件夹名称
+            base_name = archive_name
+            for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
+                if base_name.lower().endswith(ext):
+                    base_name = base_name[:-len(ext)]
+                    break
+            actual_extract_dir = os.path.join(extract_dir, base_name)
+            os.makedirs(actual_extract_dir, exist_ok=True)
+        
         # 检测是否加密
         is_archive, is_encrypted = is_archive_encrypted(archive_file)
         
@@ -399,7 +417,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
                 extraction_status[task_id]['message'] = '需要密码，正在尝试... (限制: 5次重试/60秒超时)'
             
             # 有重试次数限制和超时控制
-            success, msg, used_pwd = extract_with_password_dict(archive_file, extract_dir, max_retries=5, timeout_sec=60)
+            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_sec=60)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
@@ -421,7 +439,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
             with extraction_lock:
                 extraction_status[task_id]['message'] = '无加密，正在解压...'
             
-            success, msg = extract_archive(archive_file, extract_dir)
+            success, msg = extract_archive(archive_file, actual_extract_dir)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
@@ -525,9 +543,16 @@ def extract():
 
         archives = data.get('archives', [])
         extract_base = data.get('extract_to', '/vol1/1000/Temp')
+        extract_to_same_name = data.get('extract_to_same_name', False)
+        auto_delete_success = data.get('auto_delete_success', False)
 
         if not archives:
             return jsonify({'error': '没有选择任何文件'}), 400
+
+        # 保存提取选项
+        global extraction_options
+        extraction_options['extract_to_same_name'] = extract_to_same_name
+        extraction_options['auto_delete_success'] = auto_delete_success
 
         # 确保解压基目录存在
         try:
@@ -536,8 +561,11 @@ def extract():
             logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
             return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
 
-        # 创建临时目录
-        extract_dir = tempfile.mkdtemp(dir=extract_base)
+        # 如果启用了"解压到同名文件夹"，则不创建临时目录，而是逐个创建同名文件夹
+        if extract_to_same_name:
+            extract_dir = extract_base
+        else:
+            extract_dir = tempfile.mkdtemp(dir=extract_base)
 
         tasks = {}
         for i, archive in enumerate(archives):
@@ -552,10 +580,16 @@ def extract():
             thread.daemon = True
             thread.start()
 
+        logger.info(f"启动解压: {len(archives)} 个文件，选项: 同名文件夹={extract_to_same_name}, 自动删除={auto_delete_success}")
+
         return jsonify({
             'extract_dir': extract_dir,
             'task_count': len(tasks),
-            'tasks': tasks
+            'tasks': tasks,
+            'options': {
+                'extract_to_same_name': extract_to_same_name,
+                'auto_delete_success': auto_delete_success
+            }
         })
     except Exception as e:
         logger.exception(f"启动解压失败: {e}")
@@ -711,6 +745,52 @@ def download_logs():
         except Exception as e:
             logger.error(f"下载日志失败: {e}")
             return jsonify({'error': '日志下载失败'}), 500
+
+@app.route('/api/delete-archives', methods=['POST'])
+def delete_archives():
+    """删除指定的压缩包文件"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '无效的请求数据'}), 400
+        
+        files = data.get('files', [])
+        if not files:
+            return jsonify({'error': '没有指定要删除的文件'}), 400
+        
+        deleted_files = []
+        failed_files = []
+        
+        for file_path in files:
+            try:
+                # 安全检查：确保文件确实存在且是我们期望的类型
+                if not os.path.exists(file_path):
+                    failed_files.append({'file': file_path, 'error': '文件不存在'})
+                    continue
+                
+                # 检查是否是压缩包
+                if not any(file_path.lower().endswith(ext) for ext in ['.7z', '.zip', '.rar', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2']):
+                    failed_files.append({'file': file_path, 'error': '不是有效的压缩包文件'})
+                    continue
+                
+                # 删除文件
+                os.remove(file_path)
+                deleted_files.append(file_path)
+                logger.info(f"已删除成功解压的压缩包: {file_path}")
+            except Exception as e:
+                failed_files.append({'file': file_path, 'error': str(e)})
+                logger.error(f"删除文件失败 {file_path}: {e}")
+        
+        return jsonify({
+            'success': True,
+            'deleted': deleted_files,
+            'failed': failed_files,
+            'deleted_count': len(deleted_files),
+            'failed_count': len(failed_files)
+        })
+    except Exception as e:
+        logger.exception(f"删除压缩包API失败: {e}")
+        return jsonify({'error': f'删除失败: {str(e)}'}), 500
     return jsonify({'error': '日志文件不存在'}), 404
 
 if __name__ == '__main__':

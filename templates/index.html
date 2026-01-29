@@ -537,6 +537,21 @@
                 <div class="input-group">
                     <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
                 </div>
+                
+                <!-- 解压选项 -->
+                <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
+                    <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
+                        <input type="checkbox" id="extractToSameName" style="margin-right: 8px; cursor: pointer;">
+                        <span style="color: #333; font-size: 14px;">📁 解压到同名文件夹</span>
+                    </label>
+                    <small style="color: #999; margin-left: 24px; display: block;">勾选后，每个压缩包将解压到与其同名的文件夹（忽略扩展名）</small>
+                    
+                    <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
+                        <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
+                        <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
+                    </label>
+                    <small style="color: #999; margin-left: 24px; display: block;">勾选后，成功解压的压缩包将被自动删除（请谨慎使用）</small>
+                </div>
             </div>
 
             <!-- 操作按钮 -->
@@ -949,6 +964,8 @@
             }
 
             const extractTo = document.getElementById('extractPath').value.trim() || '/vol1/1000/Temp';
+            const extractToSameName = document.getElementById('extractToSameName').checked;
+            const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
 
             document.getElementById('listSection').style.display = 'none';
             document.getElementById('actionSection').style.display = 'none';
@@ -961,7 +978,12 @@
                 const response = await fetch('/api/extract', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ archives: selected, extract_to: extractTo })
+                    body: JSON.stringify({ 
+                        archives: selected, 
+                        extract_to: extractTo,
+                        extract_to_same_name: extractToSameName,
+                        auto_delete_success: autoDeleteSuccess
+                    })
                 });
 
                 const text = await response.text();
@@ -1020,10 +1042,12 @@
             // 生成成功失败清单
             const successList = [];
             const failList = [];
+            const successFiles = [];
             for (const [taskId, taskStatus] of Object.entries(finalStatus)) {
                 const fileName = taskStatus.file.split('/').pop();
                 if (taskStatus.status === 'success') {
                     successList.push(fileName);
+                    successFiles.push(taskStatus.file);
                 } else {
                     failList.push(`${fileName} (${taskStatus.message})`);
                 }
@@ -1038,9 +1062,42 @@
             }
 
             setTimeout(() => {
-                alert(summaryMsg);
-                location.reload();
+                // 如果有成功的解压且启用了自动删除，则显示删除确认
+                const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
+                if (successFiles.length > 0 && autoDeleteSuccess) {
+                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
+                        deleteSuccessfulArchives(successFiles);
+                    } else {
+                        location.reload();
+                    }
+                } else if (successFiles.length > 0) {
+                    // 即使没启用自动删除，也给用户删除的选项
+                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
+                        deleteSuccessfulArchives(successFiles);
+                    } else {
+                        location.reload();
+                    }
+                } else {
+                    alert(summaryMsg);
+                    location.reload();
+                }
             }, 1000);
+        }
+
+        async function deleteSuccessfulArchives(files) {
+            try {
+                const response = await fetch('/api/delete-archives', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files })
+                });
+                const data = await response.json();
+                alert(data.message || '✅ 已删除压缩包');
+            } catch (e) {
+                alert('❌ 删除失败: ' + e.message);
+            } finally {
+                location.reload();
+            }
         }
 
         function formatSize(bytes) {
