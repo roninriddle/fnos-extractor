@@ -1,7 +1,7 @@
 # FNOS 批量解压工具 - 项目完成报告
 
 **项目名称**: FNOS 批量解压工具  
-**版本**: 1.1.0  
+**版本**: 1.1.1  
 **维护者**: Ronin  
 **完成日期**: 2026-01-29  
 **状态**: ✅ 生产就绪
@@ -141,7 +141,7 @@ UI 类:
 ```
 fnos-extractor/
 ├── README.md                 - 项目说明（维护者: Ronin）
-├── CHANGELOG.md              - 更新日志（v1.1.0）
+├── CHANGELOG.md              - 更新日志（v1.1.1）
 ├── DEPLOYMENT.md             - 部署指南
 ├── UI_GUIDE.md               - UI 使用指南
 ├── COMPLETION_REPORT.md      - 项目完成报告
@@ -243,13 +243,19 @@ environment:
 | 文档 | 内容 | 维护者 |
 |------|------|--------|
 | README.md | 项目说明、功能介绍、快速开始 | Ronin |
-| CHANGELOG.md | 版本更新日志 v1.1.0 | Ronin |
+| CHANGELOG.md | 版本更新日志 v1.1.1 | Ronin |
 | DEPLOYMENT.md | 详细部署和运维指南 | Ronin |
 | UI_GUIDE.md | Web 界面使用说明 | Ronin |
 | TECHNICAL_DETAILS.md | 技术架构和 API 文档 | Ronin |
 | COMPLETION_REPORT.md | 项目完成报告 | Ronin |
 
 ## 🎓 版本历史
+
+### v1.1.1 (2026-01-29)
+- 🔧 修复挂载目录搜索权限问题
+- 🔧 改进递归扫描的错误处理
+- 🔧 添加 os.walk 备选扫描方案
+- 🔧 更新默认挂载路径到 /vol1/1000/Temp
 
 ### v1.1.0 (2026-01-29)
 - ✨ 新增密码缓存功能
