@@ -1,50 +1,79 @@
-# FNOS 批量解压工具
+# FNOS 批量解压工具 v1.2
 
-🚀 一个生产级别的批量解压工具，支持 Web UI、递归扫描、密码自动检测和智能解压。
-docker pull roninriddle/fnos-extractor
+🚀 一个生产级别的批量解压工具，支持 Web UI、递归扫描、密码自动检测、智能解压和多种提取模式。
 
-已知问题：7z加密压缩包无法处理。下周更新。周末要打螺丝顾不上。
+**官方镜像**: `docker pull roninriddle/fnos-extractor`
 
 **维护者**: Ronin
 
-## ✨ 核心特性
+---
 
-- **🌐 Web UI** - 现代化网页界面，开箱即用
-- **📁 递归扫描** - 自动扫描目录及所有子目录
-- **🔐 智能密码** - 自动检测是否加密，使用密码词典尝试解压
-- **💾 密码缓存** - ⭐ 自动记忆成功密码，性能提升 10-50 倍（v1.1.0+）
-- **⚙️ 目录管理** - ⭐ Web 界面快速切换工作目录（v1.1.0+）
-- **🔐 密码编辑** - ⭐ 在线编辑密码词典（v1.1.0+）
-- **🎯 批量操作** - 支持批量选择和批量解压
-- **📊 实时进度** - 实时显示解压状态和日志
-- **🧼 无污染** - 容器清理不留痕迹
-- **⚡ 高效率** - 多线程并发处理
+## ✨ v1.2 核心特性
 
-## 📦 支持格式
+### 📁 扫描与检测
+- **🔍 智能扫描** - 支持递归扫描或仅扫描当前目录，可选控制
+- **🌐 自动检测** - 智能判断压缩包是否加密（支持 7z/ZIP/RAR）
+- **⚡ 性能优化** - 快速扫描大目录，非递归模式大幅提升速度
+- **📊 实时统计** - 显示总文件数、加密文件数、已选文件数
 
-- `.7z` (7-Zip)
-- `.rar` (RAR)
-- `.zip` (ZIP)
+### 🔐 密码与解压
+- **🔑 智能密码检测** - 自动识别加密压缩包并激活密码尝试流程
+- **📚 密码词典** - 使用 `passwords.txt` 词典文件进行密码尝试
+- **⚡ 超时优化** - 每个密码独立 5 秒超时（可快速失败），不阻塞整体流程
+- **💾 密码缓存** - 自动记忆成功密码，后续相同文件快速解压
+- **📝 密码编辑** - Web UI 在线编辑密码词典，即时生效
+
+### 📦 解压模式（v1.2 新增）
+- **📍 当前文件夹** - 解压到压缩包所在的目录
+- **📂 同名文件夹** - 自动创建与压缩包同名的文件夹，解压其中
+- **🎯 指定目录** - 解压到用户指定的目录路径
+
+### 🎛️ 控制与管理
+- **✅ 批量操作** - 支持全选/反选/逐个选择，批量解压
+- **⏸️ 流程控制** - 暂停/停止正在进行的解压任务
+- **🗑️ 自动删除** - 解压成功后自动删除源压缩包（可选）
+- **📥 日志下载** - 一键下载完整的操作日志，用于问题排查
+
+### 🌐 Web UI 功能
+- **💻 现代化界面** - 响应式设计，适配各种屏幕尺寸
+- **📊 实时进度** - 实时显示解压状态、已完成/总数、当前操作文件
+- **🎨 配置面板** - 快速切换工作目录、配置解压选项
+- **📋 日志面板** - 详细日志显示，支持查看解压过程中的每一步
+- **🔔 状态提示** - 清晰的成功/失败/跳过提示
+
+### 📁 支持的压缩格式
+- `.7z` (7-Zip) - 包括加密 7z
+- `.rar` (RAR) - 包括加密 RAR
+- `.zip` (ZIP) - 包括加密 ZIP
+- `.tar` (TAR)
+- `.tar.gz` / `.tgz` (TAR + GZIP)
+- `.tar.bz2` / `.tbz2` (TAR + BZIP2)
+
+---
 
 ## 🚀 快速开始
 
-### 方式一：Docker Hub 拉取（最快）✨ 推荐
+### 方式一：Docker Hub 拉取（推荐 ⭐）
 
 ```bash
-# 拉取官方镜像
+# 拉取官方镜像（最新版本）
 docker pull roninriddle/fnos-extractor:latest
+
+# 或指定版本
+docker pull roninriddle/fnos-extractor:1.2
 
 # 运行容器
 docker run -d \
   --name fnos-extractor \
   -p 5000:5000 \
-  -v /volume1/downloads:/volume1/downloads \
+  -v /data/archives:/vol1/1000/Temp \
   roninriddle/fnos-extractor:latest
 
-# 访问 http://localhost:5000
+# 访问 Web UI
+# 打开浏览器：http://localhost:5000
 ```
 
-Docker Hub 地址：https://hub.docker.com/r/roninriddle/fnos-extractor
+**Docker Hub 地址**: https://hub.docker.com/r/roninriddle/fnos-extractor
 
 ### 方式二：Docker Compose（推荐）
 
@@ -53,35 +82,41 @@ Docker Hub 地址：https://hub.docker.com/r/roninriddle/fnos-extractor
 git clone https://github.com/roninriddle/fnos-extractor.git
 cd fnos-extractor
 
-# 2. 启动容器
+# 2. 编辑 docker-compose.yml（根据需要调整卷挂载）
+vim docker-compose.yml
+
+# 3. 启动容器
 docker-compose up -d
 
-# 3. 访问 Web UI
-# 打开浏览器访问 http://localhost:5000
+# 4. 查看日志
+docker-compose logs -f fnos-extractor
+
+# 5. 访问 http://localhost:5000
 ```
 
 ### 方式三：本地构建
 
 ```bash
 # 构建镜像
-docker build -t fnos-extractor:latest .
+docker build -t fnos-extractor:1.2 .
 
 # 运行容器
 docker run -d \
   --name fnos-extractor \
   -p 5000:5000 \
-  -v /volume1/downloads:/volume1/downloads \
-  fnos-extractor:latest
-
-# 访问 http://localhost:5000
+  -v /data/archives:/vol1/1000/Temp \
+  fnos-extractor:1.2
 ```
 
-### 方式四：本地运行（需要系统工具）
+### 方式四：本地运行（开发模式）
 
 ```bash
 # 安装依赖
 pip install flask
-sudo apt-get install p7zip-full unrar unzip
+
+# 安装系统工具
+sudo apt-get install p7zip-full unrar unzip  # Ubuntu/Debian
+brew install p7zip unrar unzip                # macOS
 
 # 运行应用
 python app.py
@@ -89,408 +124,259 @@ python app.py
 # 访问 http://localhost:5000
 ```
 
-## 📝 使用说明
+---
 
-### Web UI 功能（v1.1.0+）
-
-#### 📁 目录管理选项卡
-- 快速切换常用目录（/volume1/downloads、/home、/tmp）
-- 输入自定义目录路径
-- 实时同步到扫描界面
-
-#### 🔐 密码本选项卡
-- 在线编辑密码词典
-- 实时显示密码数量
-- 保存到服务器
-
-#### 💾 缓存管理选项卡
-- 查看已缓存的成功密码
-- 快速清空缓存
-- 了解性能优化情况
+## 📖 使用指南
 
 ### 1️⃣ 扫描目录
 
-在 Web 界面输入要扫描的目录路径，点击"扫描"按钮。
+#### 步骤
+1. 在"扫描设置"中输入目录路径（如 `/data/archives`）
+2. **可选**: 勾选/取消"包含子目录"选项
+   - ✅ 勾选：递归扫描所有子目录（默认）
+   - ❌ 取消：仅扫描当前目录（大目录更快）
+3. 点击 🔍 **扫描** 按钮
 
-- 自动扫描所有子目录
-- 显示包含压缩包的子目录（点击快速切换）
-- 实时检测文件是否加密
+#### 扫描结果
+- 显示找到的压缩包总数
+- 显示加密文件数量
+- 列表显示每个文件的路径、大小、加密状态、缓存状态
 
-**示例**：
-- `/volume1/downloads` - 扫描整个下载目录
-- `/home/user/archives` - 扫描指定目录
-- `/mnt/nas/files` - 扫描 NAS 挂载点
+### 2️⃣ 选择压缩包
 
-### 2️⃣ 选择文件
+#### 选择方式
+- **单个选择**: 点击文件行的复选框
+- **全选**: 点击 ✓ **全选** 按钮
+- **反选**: 点击 ⬜ **反选** 按钮
+- **逆序**: 点击 🔄 **逆序** 按钮
 
-- ✓ **全选** - 选择所有文件
-- ✗ **取消选择** - 取消所有选择
-- 🔐 **仅选密码** - 仅选择加密文件
+#### 显示信息
+- 已选择文件数 / 总文件数
+- 已选择文件总大小
 
-### 3️⃣ 解压配置
+### 3️⃣ 配置解压选项
 
-指定解压目录
+#### 解压模式（三选一）
+- **📍 解压到当前文件夹**: 直接在压缩包所在目录解压
+  ```
+  /data/archives/file.7z → /data/archives/extracted_files/
+  ```
+- **📂 解压到同名文件夹**: 以压缩包名创建文件夹
+  ```
+  /data/archives/file.7z → /data/archives/file/extracted_files/
+  ```
+- **🎯 解压到指定目录**: 解压到自定义路径
+  ```
+  /data/archives/file.7z → /backup/extracted/extracted_files/
+  ```
+
+#### 其他选项
+- **🗑️ 成功后自动删除**: 解压成功后自动删除源文件（谨慎使用！）
+
 ### 4️⃣ 开始解压
 
-点击"开始批量解压"按钮，实时查看进度和日志。
+1. **选择解压模式和选项**
+2. **点击 ▶️ 开始解压** 按钮
+3. **监控进度**:
+   - 显示当前正在解压的文件
+   - 已完成数 / 总数
+   - 实时进度条
+   - 详细日志输出
 
-**智能密码尝试**：
-- 首先尝试缓存中的成功密码
-- 再尝试密码词典中的所有密码
-- 成功密码会自动保存到缓存
-- 下次解压相同加密类型时速度大幅提升（10-50倍）
+### 5️⃣ 流程控制
 
-## 🔧 配置
+#### 暂停
+- 点击 ⏸️ **暂停** 按钮
+- 当前文件完成后暂停
+- 点击 ▶️ **继续** 恢复
 
-### 修改密码词典
+#### 停止
+- 点击 ⏹️ **停止** 按钮
+- 立即停止所有解压
+- 已完成的文件保留，未完成的文件可能不完整
 
-编辑 `passwords.txt` 文件，每行一个密码：
+### 6️⃣ 查看日志
+
+#### 实时日志
+- Web UI 下方显示实时日志
+- 包含每个文件的解压结果、错误信息、使用的密码等
+
+#### 下载日志
+- 点击 ⬇️ **下载** 按钮
+- 下载完整的日志文件用于存档或问题排查
+- 文件名格式: `fnos_logs_TIMESTAMP.log`
+
+---
+
+## 🔧 高级配置
+
+### 密码词典
+
+#### 编辑密码
+1. 点击 ⚙️ **设置** 按钮
+2. 选择"密码管理"标签页
+3. 在文本框中编辑密码（每行一个）
+4. 点击 💾 **保存** 按钮
+
+#### 密码优先级
+- 首先尝试 **缓存密码**（上次成功的密码）
+- 然后按顺序尝试词典中的密码
+- 最多尝试前 5 个密码（可在代码中修改 `max_retries` 参数）
+
+#### 密码超时
+- 每个密码有 **5 秒独立超时**
+- 如果 5 秒内密码未确认，自动尝试下一个
+- 可在代码中修改 `timeout_per_password` 参数
+
+### 工作目录快速切换
+
+在设置面板的"目录管理"选项卡中：
+- **常用目录**: 一键切换到常用路径
+- **自定义目录**: 输入任意目录路径
+
+---
+
+## 📊 工作流示例
+
+### 场景：批量解压 500+ 加密 7z 文件
 
 ```
-123456
-password
-admin
-...
+1. 输入目录: /data/archives/encrypted_backups
+2. 不勾选"包含子目录"（该目录都是文件，无子目录）
+3. 点击扫描，找到 523 个加密 7z 文件
+4. 点击"全选"
+5. 选择"解压到同名文件夹"
+6. 点击"成功后自动删除"
+7. 点击"开始解压"
+8. 系统自动：
+   - 尝试缓存密码（快速）
+   - 尝试词典密码（每个 5 秒超时）
+   - 成功时保存密码到缓存
+   - 完成后删除源文件
+9. 监控进度，完成后下载日志
 ```
 
-### 修改默认目录
+---
 
-编辑 `app.py` 中的配置：
+## 🐛 常见问题
 
-```python
-'default_mount': '/volume1/downloads',
-```
+### Q: 7z 文件检测超时怎么办？
+**A**: v1.2 已优化 - 检测超时自动假设加密，立即进入密码尝试流程，不再阻塞。
 
-或在运行时通过环境变量设置：
+### Q: 密码太多，为什么只尝试 5 个？
+**A**: 限制是为了防止过长等待。可编辑 `app.py` 中的 `max_retries` 参数修改尝试数。
 
-```bash
-docker run -e DEFAULT_MOUNT=/custom/path ...
-```
+### Q: 解压失败的文件怎么重新尝试？
+**A**: 页面刷新重新扫描，再次选择失败的文件即可重试。
 
-### 自定义解压器
+### Q: 支持密码是数字/特殊字符吗？
+**A**: 支持，密码词典支持任何字符。建议 UTF-8 编码。
 
-如果需要添加更多格式支持，编辑 `app.py` 中的 `is_archive_encrypted()` 和 `extract_archive()` 函数。
+### Q: 能否不删除原文件直接解压？
+**A**: 可以，取消勾选"成功后自动删除"选项。
+
+### Q: 日志文件保存在哪里？
+**A**: 容器内保存在应用日志目录，Web UI 提供下载功能。
+
+---
+
+## 📦 版本历史
+
+### v1.2 (当前版本)
+**发布日期**: 2026-01-30
+
+**新增功能**:
+- ✨ 每个密码独立 5 秒超时（之前是整体 60 秒）
+- ✨ 子目录可选扫描（支持仅扫描当前目录以加快速度）
+- ✨ 前端添加"包含子目录"复选框控制
+- ✨ 后端 `find_all_archives()` 函数支持 `recursive` 参数
+- ✨ API `/api/scan` 新增 `include_subdirs` 参数
+
+**改进**:
+- 🚀 性能优化：非递归模式大幅提升扫描速度
+- 🔧 代码优化：简化 7z 检测逻辑
+- 📝 文档完善：详细的用户指南和配置说明
+
+**bug修复**:
+- 修复超时导致整体流程阻塞的问题
+- 优化密码尝试的超时控制
+
+### v1.1.71
+- 7z 检测超时自动假设加密
+- 移除双层 7z 命令检测
+- 单层 30 秒超时
+
+### v1.1.7
+- 添加日志下载功能
+- 版本徽章显示
+- UI 优化
+
+### v1.1.6
+- 修复 GitHub Actions CI/CD
+- 自动 Docker 镜像推送
+
+### v1.1.5
+- 三种解压模式
+- 自动删除成功文件功能
+- Web UI 完整实现
+
+### v1.0
+- 基础解压功能
+- 密码检测和词典尝试
+
+---
 
 ## 🏗️ 项目结构
 
 ```
 fnos-extractor/
-├── app.py                  # Flask 后端应用
+├── app.py                      # Flask 后端应用（824 行）
 ├── templates/
-│   └── index.html          # Web UI 前端
-├── passwords.txt           # 密码词典
-├── Dockerfile              # Docker 镜像定义
-├── docker-compose.yml      # Docker Compose 配置
-├── requirements.txt        # Python 依赖
-└── README.md               # 本文档
+│   └── index.html             # Web UI 前端（1164 行）
+├── Dockerfile                  # Docker 镜像定义
+├── docker-compose.yml         # Docker Compose 配置
+├── requirements.txt           # Python 依赖
+├── passwords.txt              # 密码词典文件
+├── .github/
+│   └── workflows/
+│       └── docker-publish.yml # GitHub Actions CI/CD
+└── README.md                  # 本文件
 ```
-
-## 🔍 工作原理
-
-### 加密检测流程
-
-1. 调用 `7z list / unrar list / unzip -l` 命令
-2. 检查返回码和标准错误输出
-3. 如果返回失败或包含 "password" / "encrypted"，则判断为加密
-
-### 解压流程
-
-**无加密文件**：
-```
-文件 → 直接解压 ✓
-```
-
-**加密文件**：
-```
-文件 → 检测加密 → 尝试密码词典 → 成功/失败
-```
-
-### 并发处理
-
-- 每个压缩包使用独立线程处理
-- 支持同时解压多个文件
-- 实时推送状态到前端
-
-## 📊 API 接口
-
-### `GET /api/config`
-
-获取应用配置
-
-**响应**：
-```json
-{
-  "default_mount": "/volume1/downloads",
-  "password_cache_size": 5,
-  "password_dict_size": 63,
-  "supported_formats": [".7z", ".rar", ".zip"]
-}
-```
-
-### `POST /api/scan`
-
-扫描目录
-
-**请求**：
-```json
-{
-  "path": "/volume1/downloads"
-}
-```
-
-**响应**：
-```json
-{
-  "total": 5,
-  "archives": [
-    {
-      "path": "/volume1/downloads/file1.7z",
-      "name": "file1.7z",
-      "size": 1024000,
-      "encrypted": false
-    }
-  ],
-  "subdirs_with_archives": {
-    "subdir1": 3,
-    "subdir2": 2
-  }
-}
-```
-
-### `POST /api/extract`
-
-开始解压
-
-**请求**：
-```json
-{
-  "archives": ["/path/to/file1.7z"],
-  "extract_to": "/volume1/downloads/extracted"
-}
-```
-
-### `GET /api/status`
-
-获取解压状态
-
-**响应**：
-```json
-{
-  "task_0": {
-    "status": "success",
-    "file": "/path/to/file1.7z",
-    "message": "成功 (密码: 123456)"
-  }
-}
-```
-
-### `GET /api/password-cache`
-
-获取密码缓存（v1.1.0+）
-
-**响应**：
-```json
-{
-  "123456": ["file1.7z"],
-  "admin": ["file2.zip"]
-}
-```
-
-### `DELETE /api/password-cache`
-
-清空密码缓存（v1.1.0+）
-
-### `GET /api/passwords`
-
-获取密码词典（v1.1.0+）
-
-### `POST /api/passwords`
-
-更新密码词典（v1.1.0+）
-
-**请求**：
-```json
-{
-  "passwords": ["123456", "password", "admin"]
-}
-```
-
-### `POST /api/subdirs`
-
-扫描子目录（v1.1.0+）
-
-**请求**：
-```json
-{
-  "path": "/volume1/downloads"
-}
-```
-
-## 🐛 故障排查
-
-### 容器无法启动
-
-```bash
-# 查看日志
-docker logs fnos-extractor
-
-# 检查端口是否被占用
-lsof -i :5000
-```
-
-### 无法访问 Web UI
-
-- 确认容器已启动：`docker ps | grep fnos`
-- 检查防火墙：`sudo ufw allow 5000`
-- 尝试本地访问：`curl http://localhost:5000`
-
-### 解压失败
-
-1. 检查文件权限
-2. 确认密码词典已加载：查看启动日志
-3. 手动测试命令：
-   ```bash
-   7z x -ppassword file.7z -o/output
-   unrar x -ppassword file.rar /output
-   unzip -P password file.zip -d /output
-   ```
-
-### 密码识别失败
-
-- 确认密码词典已加载
-- 添加更多常见密码到 `passwords.txt`
-- 检查密码是否包含特殊字符
-
-## 📈 性能优化
-
-### 对于大量文件
-
-1. **增加线程数**（编辑 `app.py`）：
-   ```python
-   # 增加并发处理的文件数
-   max_workers = 4  # 默认为 1
-   ```
-
-2. **使用 SSD**：存储密码词典和临时文件
-
-3. **分批扫描**：不要一次性扫描太大的目录树
-
-### 内存管理
-
-- 容器默认无内存限制
-- 在 `docker-compose.yml` 中设置限制：
-  ```yaml
-  deploy:
-    resources:
-      limits:
-        memory: 2G
-  ```
-
-## 🔐 安全建议
-
-1. **访问控制** - 部署时添加反向代理和认证
-2. **网络隔离** - 仅在内网运行
-3. **日志审计** - 定期检查解压日志
-4. **密码安全** - 不要把常见密码写进去，添加专项密码
-
-## 📜 版本历史
-
-
-### v1.1.71（当前）- 2026-01-30 ✅ 已发布到 Docker Hub
-
-**调试增强**：
-- 🔍 增加7z加密检测详细调试日志，输出命令返回码、stdout和stderr，便于排查问题
-
-### v1.1.7 - 2026-01-30 ✅ 已发布到 Docker Hub
-
-**修复与改进**：
-- 🐛 修复7z加密包检测，超时/命令失败时前端显示“未知/无法判断”，流程不中断
-- 📝 前端显示日志下载按钮
-- 🚫 解压完成后不再自动刷新页面，保留进度和结果
-- 🖥️ 解压设置界面优化：仅选择“解压到指定目录”时显示路径输入框
-
-### v1.1.6 - 2026-01-30 ✅ 已发布到 Docker Hub
-
-**新增功能**：
-- 📁 解压到同名文件夹：选择后，每个压缩包解压到与其同名的文件夹中
-- 🗑️ 自动删除成功解压的压缩包：解压完成后自动删除已成功解压的压缩包文件
-- 🎯 更便利的批量操作流程
-
-### v1.1.4 - 2026-01-30 ✅ 已发布到 Docker Hub
-
-**重要修复和功能**：
-- 🐛 修复 7z 加密文件解压失败问题（密码参数位置错误）
-- ⏸️ 添加解压控制：暂停、继续、停止解压
-- 📝 增强错误日志：文件日志输出和实时查看功能
-- 💾 支持日志下载，便于问题诊断
-
-### v1.1.3 - 2026-01-30 ✅ 已发布到 Docker Hub
-
-**优化**：
-- ✨ 扫描后显示扫描中状态，提升用户体验
-- ✨ 解压完成后显示成功失败清单，方便查看结果
-- 🔧 加强加密压缩包处理：重试限制 5 次、超时 60 秒，提高稳定性
-- 📝 增强日志输出，便于排查问题
-
-### v1.1.2 - 2026-01-29 ✅ 已发布到 Docker Hub
-
-**修复**：
-- 🔧 修复解压 API 异常处理，确保返回 JSON 格式错误响应
-- 🔧 改进前端错误处理，更好地识别非 JSON 响应
-- 🔧 增强目标解压目录验证和创建逻辑
-
-### v1.1.1 - 2026-01-29 ✅ 已发布到 Docker Hub
-
-**新增和改进**：
-- 📦 添加 `.tar` 系列格式支持（.tar, .tar.gz, .tgz, .tar.bz2, .tbz2）
-- 🔧 修复挂载目录搜索权限问题
-- 🔧 改进递归扫描的错误处理
-- 🔧 添加 os.walk 备选扫描方案
-- 🔧 更新默认挂载路径到 /vol1/1000/Temp
-
-### v1.1.0 - 2026-01-29 ✅ 已发布到 Docker Hub
-
-**新增功能**：
-- 💾 密码缓存系统 - 自动缓存成功密码，性能提升 10-50 倍
-- 📁 子目录检测 - 自动识别含压缩包的子目录
-- ⚙️ 目录管理 - Web 界面快速切换工作目录
-- 🔐 密码编辑 - 在线编辑密码词典
-- 📊 完整 API - 新增缓存、密码、子目录管理接口
-
-**改进**：
-- 优化前端界面，添加设置面板
-- 增强错误处理和日志输出
-- 改进密码尝试策略
-
-### v1.0.0 - 基础版本
-
-**功能**：
-- Web UI 界面
-- 递归目录扫描
-- 智能密码检测
-- 批量解压支持
-- 实时进度显示
-
-## 🙏 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## � 项目链接
-
-- **GitHub**: https://github.com/roninriddle/fnos-extractor
-- **Docker Hub**: https://hub.docker.com/r/roninriddle/fnos-extractor
-- **Issues**: https://github.com/roninriddle/fnos-extractor/issues
-
-## 📞 支持
-
-- 💬 Issues: https://github.com/roninriddle/fnos-extractor/issues
-- 📖 Wiki: https://github.com/roninriddle/fnos-extractor/wiki
-
-## 👨‍💼 维护者
-
-- **Ronin** - 主要开发者和维护者
 
 ---
 
-**Made with ❤️ by Ronin for FNOS users**
+## 🔐 安全说明
 
+### 密码处理
+- ✅ 密码仅在内存中处理，不上传
+- ✅ 成功密码缓存到本地 JSON 文件
+- ⚠️ 不要在 `passwords.txt` 中放置机密密码
+- ⚠️ 容器运行时注意卷挂载权限
+
+### 文件安全
+- ⚠️ 启用"自动删除"功能后，解压成功的文件会被永久删除
+- ✅ 建议先在测试目录验证，再用于生产环境
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+---
+
+## 📄 许可
+
+MIT License
+
+---
+
+## 📞 联系方式
+
+- **GitHub**: https://github.com/roninriddle/fnos-extractor
+- **Docker Hub**: https://hub.docker.com/r/roninriddle/fnos-extractor
+- **维护者**: Ronin
+
+---
+
+**Last Updated**: 2026-01-30 | Version: 1.2

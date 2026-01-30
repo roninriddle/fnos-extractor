@@ -492,7 +492,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.1.71</div>
+            <div class="version-badge">v1.2</div>
             <h1>📦 FNOS 批量解压</h1>
             <p>智能递归扫描 • 密码自动检测 • 批量解压</p>
         </div>
@@ -506,7 +506,13 @@
                     <button class="btn-primary" onclick="scanDirectory()">🔍 扫描</button>
                     <button class="btn-secondary" onclick="openSettingsModal()">⚙️ 设置</button>
                 </div>
-                <small style="color: #999;">将递归扫描该目录下所有 .7z, .rar, .zip 文件</small>
+                <div style="margin-top: 12px;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="includeSubdirs" checked style="margin-right: 8px; cursor: pointer;">
+                        <span>包含子目录（勾选时递归扫描所有子目录）</span>
+                    </label>
+                </div>
+                <small style="color: #999;">将扫描该目录下所有 .7z, .rar, .zip 等压缩文件</small>
             </div>
 
             <!-- 统计部分 -->
@@ -841,10 +847,11 @@
             document.getElementById('actionSection').style.display = 'block';
 
             try {
+                const include_subdirs = document.getElementById('includeSubdirs').checked;
                 const response = await fetch('/api/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path })
+                    body: JSON.stringify({ path, include_subdirs })
                 });
 
                 const data = await response.json();
@@ -858,11 +865,13 @@
                 renderArchiveList();
                 updateStats();
                 
-                // 显示子目录信息
-                if (data.subdirs_count > 0) {
+                // 显示子目录信息（仅在勾选包含子目录时显示）
+                if (include_subdirs && data.subdirs_count > 0) {
                     document.getElementById('subdirSection').style.display = 'block';
                     document.getElementById('subdirCountText').textContent = data.subdirs_count;
                     renderSubdirectories(data.subdirs_with_archives);
+                } else {
+                    document.getElementById('subdirSection').style.display = 'none';
                 }
             } catch (e) {
                 alert('扫描失败: ' + e.message);

@@ -2,6 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
+版本: 1.2
 """
 
 from flask import Flask, render_template, jsonify, request
@@ -229,54 +230,61 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         logger.error(f"解压异常 {file_path}: {e}")
         return False, f"解压异常: {str(e)[:100]}"
 
-def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_sec: int = 60) -> Tuple[bool, str, Optional[str]]:
+def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_per_password: int = 5) -> Tuple[bool, str, Optional[str]]:
     """
     使用密码词典尝试解压
-    支持重试次数和超时控制
+    每个密码有独立的超时控制
     返回: (成功, 消息, 使用的密码)
     """
     import time
-    start_time = time.time()
     retry_count = 0
     
     # 检查缓存
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
+        logger.info(f"尝试缓存密码: {file_path}")
         success, msg = extract_archive(file_path, extract_dir, cached_pwd)
         if success:
             return True, "解压成功 (缓存密码)", cached_pwd
         retry_count += 1
         logger.warning(f"缓存密码失败 {file_path}: {msg}，将尝试词典密码")
     
-    # 尝试词典中的密码，支持重试和超时
+    # 尝试词典中的密码，每个密码有独立的超时
+    total_start = time.time()
     for attempt in range(min(len(PASSWORD_DICT), max_retries)):
-        # 检查超时
-        elapsed = time.time() - start_time
-        if elapsed > timeout_sec:
-            logger.error(f"解压超时 ({timeout_sec}s): {file_path}")
-            return False, f"解压超时 (已尝试 {attempt+1} 个密码，耗时 {int(elapsed)}s)", None
-        
         password = PASSWORD_DICT[attempt]
+        attempt_start = time.time()
+        
         try:
+            # 每个密码尝试有独立的超时
             success, msg = extract_archive(file_path, extract_dir, password)
+            attempt_elapsed = time.time() - attempt_start
+            
             if success:
                 # 保存到缓存
                 PASSWORD_SUCCESS_CACHE[file_path] = password
                 save_password_cache()
-                logger.info(f"成功解压 {file_path} (尝试次数: {attempt+1})")
+                logger.info(f"成功解压 {file_path} (尝试次数: {attempt+1}, 密码耗时: {attempt_elapsed:.1f}s)")
                 return True, "解压成功", password
+            else:
+                # 密码错误，继续尝试下一个
+                logger.debug(f"密码尝试 {attempt+1} 失败: {password} (耗时: {attempt_elapsed:.1f}s)")
         except Exception as e:
-            logger.warning(f"解压异常 {file_path} (尝试 {attempt+1}): {e}")
+            attempt_elapsed = time.time() - attempt_start
+            logger.warning(f"解压异常 {file_path} (尝试 {attempt+1}): {e} (耗时: {attempt_elapsed:.1f}s)")
             continue
         
         retry_count += 1
     
-    elapsed = time.time() - start_time
-    logger.error(f"所有密码都失败了 {file_path} (尝试次数: {retry_count}, 耗时: {int(elapsed)}s)")
-    return False, f"所有密码都失败了 (尝试 {retry_count} 个密码，耗时 {int(elapsed)}s)", None
+    total_elapsed = time.time() - total_start
+    logger.error(f"所有密码都失败了 {file_path} (尝试次数: {retry_count}, 总耗时: {int(total_elapsed)}s)")
+    return False, f"所有密码都失败了 (尝试 {retry_count} 个密码，耗时 {int(total_elapsed)}s)", None
 
-def find_all_archives(root_dir: str) -> List[str]:
-    """递归查找所有压缩包"""
+def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
+    """
+    递归或仅查找当前目录的压缩包
+    recursive: True为递归查找所有子目录，False为仅查找当前目录
+    """
     archives = []
     root_path = Path(root_dir)
     
@@ -289,24 +297,39 @@ def find_all_archives(root_dir: str) -> List[str]:
         return archives
     
     try:
-        # 递归遍历所有文件
+        # 支持的压缩包格式
         supported_exts = ('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')
-        for archive_file in root_path.rglob('*'):
-            try:
-                # 检查是否是文件且是支持的格式（使用文件名后缀匹配以适配复合后缀）
-                if archive_file.is_file() and archive_file.name.lower().endswith(supported_exts):
-                    archives.append(str(archive_file))
-            except (OSError, PermissionError) as e:
-                # 跳过无法访问的文件，但记录日志
-                logger.debug(f"无法访问文件 {archive_file}: {e}")
-                continue
+        
+        if recursive:
+            # 递归遍历所有文件
+            for archive_file in root_path.rglob('*'):
+                try:
+                    if archive_file.is_file() and archive_file.name.lower().endswith(supported_exts):
+                        archives.append(str(archive_file))
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"无法访问文件 {archive_file}: {e}")
+                    continue
+        else:
+            # 仅查找当前目录，不递归
+            for archive_file in root_path.iterdir():
+                try:
+                    if archive_file.is_file() and archive_file.name.lower().endswith(supported_exts):
+                        archives.append(str(archive_file))
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"无法访问文件 {archive_file}: {e}")
+                    continue
+                    
     except (OSError, PermissionError) as e:
         logger.error(f"扫描目录时出错 {root_dir}: {e}")
         # 尝试使用 os.walk 作为备选方案
         try:
             for dirpath, dirnames, filenames in os.walk(root_dir):
-                # 过滤掉无法访问的目录
-                dirnames[:] = [d for d in dirnames if os.path.exists(os.path.join(dirpath, d))]
+                # 如果不递归，只处理第一层
+                if not recursive:
+                    dirnames[:] = []
+                else:
+                    # 过滤掉无法访问的目录
+                    dirnames[:] = [d for d in dirnames if os.path.exists(os.path.join(dirpath, d))]
                 
                 for filename in filenames:
                     if filename.lower().endswith(('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
@@ -417,10 +440,10 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
         # 处理加密压缩包
         if is_encrypted:
             with extraction_lock:
-                extraction_status[task_id]['message'] = '需要密码，正在尝试... (限制: 5次重试/60秒超时)'
+                extraction_status[task_id]['message'] = '需要密码，正在尝试... (每个密码5秒超时)'
             
-            # 有重试次数限制和超时控制
-            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_sec=60)
+            # 每个密码有独立的5秒超时
+            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=5)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
@@ -478,8 +501,9 @@ def scan_directory():
     """扫描目录"""
     data = request.get_json()
     root_dir = data.get('path', '/vol1/1000/Temp')
+    include_subdirs = data.get('include_subdirs', True)  # 新增参数，默认包含子目录
     
-    logger.info(f"开始扫描目录: {root_dir}")
+    logger.info(f"开始扫描目录: {root_dir} (包含子目录: {include_subdirs})")
     
     # 验证目录存在
     root_path = Path(root_dir)
@@ -497,14 +521,17 @@ def scan_directory():
         return jsonify({'error': f'没有目录读取权限: {root_dir}'}), 403
     
     try:
-        archives = find_all_archives(root_dir)
-        logger.info(f"扫描完成，发现 {len(archives)} 个压缩包")
+        archives = find_all_archives(root_dir, recursive=include_subdirs)
+        logger.info(f"扫描完成，发现 {len(archives)} 个压缩包 (子目录: {include_subdirs})")
     except Exception as e:
         logger.error(f"扫描压缩包时出错: {e}")
         return jsonify({'error': f'扫描文件时出错: {str(e)}'}), 500
     
     try:
-        subdir_stats = scan_subdirectories(root_dir)
+        if include_subdirs:
+            subdir_stats = scan_subdirectories(root_dir)
+        else:
+            subdir_stats = {}
     except Exception as e:
         logger.error(f"扫描子目录时出错: {e}")
         subdir_stats = {}
@@ -532,8 +559,8 @@ def scan_directory():
     return jsonify({
         'total': len(result),
         'archives': result,
-        'subdirs_with_archives': subdir_stats,
-        'subdirs_count': len(subdir_stats)
+        'subdirs_with_archives': subdir_stats if include_subdirs else {},
+        'subdirs_count': len(subdir_stats) if include_subdirs else 0
     })
 
 @app.route('/api/extract', methods=['POST'])
