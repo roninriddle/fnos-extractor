@@ -3,6 +3,8 @@
 🚀 一个生产级别的批量解压工具，支持 Web UI、递归扫描、密码自动检测和智能解压。
 docker pull roninriddle/fnos-extractor
 
+已知问题：7z加密压缩包无法处理。下周更新。周末要打螺丝顾不上。
+
 **维护者**: Ronin
 
 ## ✨ 核心特性
