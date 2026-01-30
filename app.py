@@ -101,35 +101,17 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                         logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
                         return True, True
                     logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
-                    # 只要命令失败且无加密提示，返回未知
-                    return True, None
+                    # 命令失败时假设可能加密，自动进入密码尝试流程
+                    return True, True
                 if 'password' in output or 'encrypted' in output or 'lock' in output or 'can not open encrypted archive' in output:
                     logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
                     return True, True
                 logger.debug(f"7z 文件检测为无加密: {file_path}")
                 return True, False
             except Exception as e:
-                logger.warning(f"7z l 检测异常，尝试7z t: {e}")
-                try:
-                    result = subprocess.run(
-                        ['7z', 't', '-y', file_path],
-                        capture_output=True,
-                        text=True,
-                        timeout=30
-                    )
-                    output = (result.stdout + result.stderr).lower()
-                    logger.debug(f"7z t 命令返回码: {result.returncode}, 文件: {file_path}")
-                    logger.debug(f"7z t stdout: {result.stdout[:200]}")
-                    logger.debug(f"7z t stderr: {result.stderr[:200]}")
-                    if result.returncode != 0 and ('password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output):
-                        logger.debug(f"7z t 检测为加密: {file_path}")
-                        return True, True
-                    # 命令失败但无加密提示，返回未知
-                    logger.warning(f"7z t 检测失败: {file_path}")
-                    return True, None
-                except Exception as e2:
-                    logger.error(f"7z t 检测也失败: {e2}")
-                    return True, None
+                logger.warning(f"7z l 检测异常，假设文件可能加密: {e}")
+                # 超时或任何异常都假设可能加密，自动进入密码尝试流程
+                return True, True
             
         elif file_name.endswith('.zip'):
             result = subprocess.run(
