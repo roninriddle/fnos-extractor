@@ -35,6 +35,7 @@
             color: white;
             padding: 30px;
             text-align: center;
+            position: relative;
         }
 
         .header h1 {
@@ -45,6 +46,18 @@
         .header p {
             font-size: 14px;
             opacity: 0.9;
+        }
+
+        .version-badge {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
         }
 
         .content {
@@ -479,6 +492,7 @@
 <body>
     <div class="container">
         <div class="header">
+            <div class="version-badge">v1.1.71</div>
             <h1>📦 FNOS 批量解压</h1>
             <p>智能递归扫描 • 密码自动检测 • 批量解压</p>
         </div>
@@ -585,7 +599,7 @@
                     <button class="btn-secondary" id="resumeBtn" onclick="resumeExtraction()" style="flex: 1; display: none;">▶️ 继续</button>
                     <button class="btn-danger" onclick="stopExtraction()" style="flex: 1;">⏹️ 停止</button>
                     <button class="btn-secondary" onclick="showLogs()" style="flex: 1;">📋 日志</button>
-                    <a href="/api/logs/download" class="btn-secondary" style="flex: 1; text-align: center; display: inline-block; line-height: 38px; text-decoration: none;">⬇️ 日志下载</a>
+                    <button class="btn-secondary" onclick="downloadLogs()" style="flex: 1;">⬇️ 下载</button>
                 </div>
             </div>
 
@@ -970,6 +984,10 @@
             } catch (e) {
                 alert('获取日志失败: ' + e.message);
             }
+        }
+
+        function downloadLogs() {
+            window.location.href = '/api/logs/download';
         }
 
         // ===== 解压操作 =====

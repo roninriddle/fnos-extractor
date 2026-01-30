@@ -90,7 +90,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     ['7z', 'l', '-y', file_path],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=30
                 )
                 output = (result.stdout + result.stderr).lower()
                 logger.debug(f"7z l 命令返回码: {result.returncode}, 文件: {file_path}")
@@ -115,7 +115,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                         ['7z', 't', '-y', file_path],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=30
                     )
                     output = (result.stdout + result.stderr).lower()
                     logger.debug(f"7z t 命令返回码: {result.returncode}, 文件: {file_path}")
