@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2
+版本: 1.2.1
 """
 
 from flask import Flask, render_template, jsonify, request
@@ -37,6 +37,9 @@ extraction_control = {
 extraction_options = {
     'extract_to_same_name': False,  # 解压到同名文件夹
     'auto_delete_success': False     # 自动删除成功的压缩包
+}
+extraction_settings = {
+    'concurrent_count': 1  # 并发解压文件数量（默认1个）
 }
 control_lock = threading.Lock()
 
@@ -75,6 +78,138 @@ def load_password_dict():
         logger.info(f"已加载 {len(PASSWORD_DICT)} 个密码")
     else:
         logger.warning("密码词典不存在")
+
+def is_multipart_archive(file_path: str) -> bool:
+    """
+    判断是否是多卷压缩文件的第一卷
+    支持格式:
+    - .part1.7z, .part2.7z, ... (7z多卷)
+    - .001, .002, ... (通用多卷)
+    - .zip.001, .zip.002, ... (zip多卷)
+    - .rar.001, .rar.002, ... (rar多卷)
+    """
+    name = Path(file_path).name.lower()
+    
+    # .part1.7z 格式
+    if '.part' in name:
+        return name.endswith('.part1.7z') or name.endswith('.part1.rar')
+    
+    # .001 / .002 等格式（7z、RAR、ZIP等）
+    if name.endswith(('.001', '.002', '.003', '.004', '.005')):
+        # 但需要排除不是第一卷的情况
+        return name.endswith('.001')
+    
+    return False
+
+def get_multipart_first_volume(file_path: str) -> Optional[str]:
+    """
+    如果是多卷压缩文件，获取第一卷的路径
+    否则返回 None
+    """
+    name = Path(file_path).name.lower()
+    
+    # .part1.7z / .part1.rar 格式 - 已经是第一卷
+    if name.endswith(('.part1.7z', '.part1.rar')):
+        return file_path
+    
+    # .001 格式 - 已经是第一卷
+    if name.endswith('.001'):
+        return file_path
+    
+    # .part2+ 或 .002+ - 需要找第一卷
+    parent = Path(file_path).parent
+    
+    # 处理 .part2, .part3 等
+    if '.part' in name:
+        # 提取基础名称和数字
+        base_name = name[:name.find('.part')]
+        for num in range(1, 100):
+            potential_first = parent / f"{base_name}.part{num}.7z"
+            if potential_first.exists():
+                if num == 1:
+                    return str(potential_first)
+                break
+    
+    # 处理 .002, .003 等（需要找 .001）
+    if name[-3:].isdigit():
+        base_name = name[:-4]  # 去掉 .001 这样的后缀
+        potential_first = parent / f"{base_name}.001"
+        if potential_first.exists():
+            return str(potential_first)
+    
+    return None
+
+def group_multipart_archives(archives: List[str]) -> Tuple[List[Dict], List[str]]:
+    """
+    将多卷压缩文件分组，返回分组后的结果
+    返回: (分组后的多卷列表, 非多卷的单文件列表)
+    
+    多卷组格式:
+    {
+        'is_multipart': True,
+        'first_volume': '/path/to/file.part1.7z',
+        'volumes': ['/path/to/file.part1.7z', '/path/to/file.part2.7z', ...],
+        'name': 'file',
+        'count': 2,
+        'total_size': 1024000
+    }
+    """
+    multipart_groups = {}  # base_name -> group info
+    single_files = []
+    
+    for archive in archives:
+        file_name = Path(archive).name.lower()
+        
+        # 检查是否是多卷文件
+        if '.part' in file_name and '.part1.' in file_name:
+            # .part1.7z 格式
+            base_name = file_name[:file_name.find('.part1')]
+            if base_name not in multipart_groups:
+                multipart_groups[base_name] = {
+                    'is_multipart': True,
+                    'first_volume': archive,
+                    'volumes': [],
+                    'name': base_name,
+                    'count': 0,
+                    'total_size': 0
+                }
+            multipart_groups[base_name]['volumes'].append(archive)
+        
+        elif file_name.endswith('.001'):
+            # .001 格式
+            base_name = file_name[:-4]  # 去掉 .001
+            if base_name not in multipart_groups:
+                multipart_groups[base_name] = {
+                    'is_multipart': True,
+                    'first_volume': archive,
+                    'volumes': [],
+                    'name': base_name,
+                    'count': 0,
+                    'total_size': 0
+                }
+            multipart_groups[base_name]['volumes'].append(archive)
+        
+        else:
+            # 单文件压缩包
+            single_files.append(archive)
+    
+    # 统计多卷信息
+    multipart_list = []
+    for group_name, group_info in multipart_groups.items():
+        group_info['volumes'].sort()  # 按名称排序
+        group_info['count'] = len(group_info['volumes'])
+        
+        # 计算总大小
+        try:
+            total_size = sum(Path(v).stat().st_size for v in group_info['volumes'])
+            group_info['total_size'] = total_size
+        except:
+            group_info['total_size'] = 0
+        
+        multipart_list.append(group_info)
+        logger.info(f"发现多卷压缩包: {group_name} ({group_info['count']} 卷, {group_info['total_size']} bytes)")
+    
+    return multipart_list, single_files
 
 def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     """
@@ -282,7 +417,7 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
 
 def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
     """
-    递归或仅查找当前目录的压缩包
+    递归或仅查找当前目录的压缩包（包括多卷文件的所有卷）
     recursive: True为递归查找所有子目录，False为仅查找当前目录
     """
     archives = []
@@ -297,8 +432,9 @@ def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
         return archives
     
     try:
-        # 支持的压缩包格式
-        supported_exts = ('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')
+        # 支持的压缩包格式（包括多卷文件）
+        supported_exts = ('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2',
+                         '.001', '.002', '.003', '.004', '.005')  # 多卷格式
         
         if recursive:
             # 递归遍历所有文件
@@ -332,7 +468,8 @@ def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
                     dirnames[:] = [d for d in dirnames if os.path.exists(os.path.join(dirpath, d))]
                 
                 for filename in filenames:
-                    if filename.lower().endswith(('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
+                    if filename.lower().endswith(('.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2',
+                                                  '.001', '.002', '.003', '.004', '.005')):
                         file_path = os.path.join(dirpath, filename)
                         try:
                             if os.path.isfile(file_path):
@@ -536,18 +673,23 @@ def scan_directory():
         logger.error(f"扫描子目录时出错: {e}")
         subdir_stats = {}
     
-    # 分析每个压缩包
-    result = []
-    for archive in archives:
+    # 将多卷文件分组
+    multipart_groups, single_archives = group_multipart_archives(archives)
+    logger.info(f"发现 {len(multipart_groups)} 个多卷文件组，{len(single_archives)} 个单文件")
+    
+    # 分析单文件压缩包
+    single_result = []
+    for archive in single_archives:
         try:
             is_arch, is_enc = is_archive_encrypted(archive)
-            result.append({
+            single_result.append({
                 'path': archive,
                 'name': Path(archive).name,
                 'size': Path(archive).stat().st_size,
                 'encrypted': is_enc if is_arch else None,
                 'status': 'ready',
-                'cached': archive in PASSWORD_SUCCESS_CACHE
+                'cached': archive in PASSWORD_SUCCESS_CACHE,
+                'is_multipart': False
             })
         except (OSError, PermissionError) as e:
             logger.warning(f"无法访问压缩包 {archive}: {e}")
@@ -556,9 +698,35 @@ def scan_directory():
             logger.warning(f"处理压缩包 {archive} 时出错: {e}")
             continue
     
+    # 分析多卷压缩包
+    multipart_result = []
+    for group in multipart_groups:
+        try:
+            # 检测第一卷是否加密
+            is_arch, is_enc = is_archive_encrypted(group['first_volume'])
+            multipart_result.append({
+                'path': group['first_volume'],  # 返回第一卷路径用于解压
+                'name': group['name'],
+                'size': group['total_size'],
+                'encrypted': is_enc if is_arch else None,
+                'status': 'ready',
+                'cached': group['first_volume'] in PASSWORD_SUCCESS_CACHE,
+                'is_multipart': True,
+                'volume_count': group['count'],
+                'volumes': group['volumes']
+            })
+        except Exception as e:
+            logger.warning(f"处理多卷压缩包 {group['name']} 时出错: {e}")
+            continue
+    
+    # 合并结果
+    result = single_result + multipart_result
+    
     return jsonify({
         'total': len(result),
         'archives': result,
+        'multipart_count': len(multipart_result),
+        'single_count': len(single_result),
         'subdirs_with_archives': subdir_stats if include_subdirs else {},
         'subdirs_count': len(subdir_stats) if include_subdirs else 0
     })
@@ -684,8 +852,33 @@ def get_config():
         'password_dict_size': len(PASSWORD_DICT),
         'password_cache_size': len(PASSWORD_SUCCESS_CACHE),
         'default_mount': '/vol1/1000/Temp',
-        'supported_formats': ['.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2']
+        'concurrent_count': extraction_settings['concurrent_count'],
+        'supported_formats': ['.7z', '.rar', '.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2'],
+        'multipart_formats': ['.part1.7z', '.part1.rar', '.001', '.002']
     })
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+def update_settings():
+    """获取或更新并发设置"""
+    if request.method == 'GET':
+        return jsonify({
+            'concurrent_count': extraction_settings['concurrent_count']
+        })
+    else:  # POST
+        data = request.get_json()
+        concurrent_count = data.get('concurrent_count', 1)
+        
+        # 验证并发数
+        if not isinstance(concurrent_count, int) or concurrent_count < 1 or concurrent_count > 32:
+            return jsonify({'error': '并发数必须在 1-32 之间'}), 400
+        
+        extraction_settings['concurrent_count'] = concurrent_count
+        logger.info(f"并发数已更新为: {concurrent_count}")
+        
+        return jsonify({
+            'success': True,
+            'concurrent_count': concurrent_count
+        })
 
 @app.route('/api/subdirs', methods=['POST'])
 def scan_subdirs():

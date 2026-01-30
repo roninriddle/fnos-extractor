@@ -492,9 +492,9 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.2</div>
+            <div class="version-badge">v1.2.1</div>
             <h1>📦 FNOS 批量解压</h1>
-            <p>智能递归扫描 • 密码自动检测 • 批量解压</p>
+            <p>智能递归扫描 • 密码自动检测 • 多卷支持 • 批量解压</p>
         </div>
 
         <div class="content">
@@ -524,6 +524,10 @@
                 <div class="status-card">
                     <h3 id="encryptedCount">0</h3>
                     <p>加密文件</p>
+                </div>
+                <div class="status-card">
+                    <h3 id="multipartCount">0</h3>
+                    <p>多卷文件</p>
                 </div>
                 <div class="status-card">
                     <h3 id="selectedCount">0</h3>
@@ -627,6 +631,7 @@
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('dir-tab')">📁 目录管理</button>
                 <button class="tab-btn" onclick="switchTab('pwd-tab')">🔐 密码本</button>
+                <button class="tab-btn" onclick="switchTab('concurrent-tab')">⚡ 并发</button>
                 <button class="tab-btn" onclick="switchTab('cache-tab')">💾 缓存</button>
             </div>
 
@@ -669,6 +674,29 @@
                 <div class="modal-footer">
                     <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
                     <button class="btn-primary" onclick="savePasswords()">💾 保存</button>
+                </div>
+            </div>
+
+            <!-- 并发设置标签 -->
+            <div id="concurrent-tab" class="tab-content">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 20px; color: #333; font-size: 14px;">⚡ 并发解压数量</h3>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <label style="font-size: 14px; color: #555; min-width: 150px;">
+                            同时解压文件数:
+                        </label>
+                        <input type="number" id="concurrentInput" min="1" max="32" value="1" 
+                               style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        <span style="font-size: 12px; color: #999;">(1-32)</span>
+                    </div>
+                    <p style="margin-top: 20px; font-size: 12px; color: #999;">
+                        💡 设置同时解压的文件数量。数值越大并发度越高，但会消耗更多系统资源。<br/>
+                        推荐值: 单核 1-2 个, 4核 2-4 个, 8核+ 4-8 个
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
+                    <button class="btn-primary" onclick="saveConcurrentSettings()">💾 保存</button>
                 </div>
             </div>
 
@@ -718,6 +746,7 @@
             document.getElementById('currentDirText').textContent = currentPath;
             loadPasswordsForEdit();
             loadCacheForDisplay();
+            loadConcurrentSettings();
         }
 
         function closeSettingsModal() {
@@ -825,7 +854,44 @@
             }
         }
 
-        // ===== 扫描和文件选择 =====
+        // ===== 并发设置 =====
+        async function saveConcurrentSettings() {
+            const concurrentCount = parseInt(document.getElementById('concurrentInput').value);
+            
+            if (!concurrentCount || concurrentCount < 1 || concurrentCount > 32) {
+                alert('❌ 并发数必须在 1-32 之间');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ concurrent_count: concurrentCount })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert(`✅ 并发数已设置为 ${data.concurrent_count}`);
+                    closeSettingsModal();
+                } else {
+                    alert('❌ 设置失败: ' + data.error);
+                }
+            } catch (e) {
+                alert('设置失败: ' + e.message);
+            }
+        }
+
+        // 初始化并发数显示
+        async function loadConcurrentSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const data = await response.json();
+                document.getElementById('concurrentInput').value = data.concurrent_count || 1;
+            } catch (e) {
+                console.error('加载并发设置失败: ' + e.message);
+            }
+        }
         async function scanDirectory() {
             const path = document.getElementById('scanPath').value.trim();
             if (!path) {
@@ -898,6 +964,7 @@
                         <div class="archive-meta">${archive.path}</div>
                         <div class="archive-meta">大小: ${formatSize(archive.size)}</div>
                     </div>
+                    ${archive.is_multipart ? `<span class="badge" style="background: #dbeafe; color: #0369a1;">📦 多卷 (${archive.volume_count}卷)</span>` : ''}
                     ${archive.encrypted === true ? '<span class="badge badge-encrypted">🔐 加密</span>' : 
                       archive.encrypted === false ? '<span class="badge badge-ok">✓ 无密</span>' : ''}
                     ${archive.cached ? '<span class="badge" style="background: #c7d2fe; color: #4338ca;">💾 缓存</span>' : ''}
@@ -909,10 +976,12 @@
 
         function updateStats() {
             const encrypted = archives.filter(a => a.encrypted === true).length;
+            const multipart = archives.filter(a => a.is_multipart === true).length;
             const selected = document.querySelectorAll('.archive-checkbox:checked').length;
 
             document.getElementById('totalCount').textContent = archives.length;
             document.getElementById('encryptedCount').textContent = encrypted;
+            document.getElementById('multipartCount').textContent = multipart;
             document.getElementById('selectedCount').textContent = selected;
         }
 
