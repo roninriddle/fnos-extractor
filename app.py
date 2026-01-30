@@ -93,6 +93,9 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     timeout=10
                 )
                 output = (result.stdout + result.stderr).lower()
+                logger.debug(f"7z l 命令返回码: {result.returncode}, 文件: {file_path}")
+                logger.debug(f"7z l stdout: {result.stdout[:200]}")
+                logger.debug(f"7z l stderr: {result.stderr[:200]}")
                 if result.returncode != 0:
                     if 'password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output:
                         logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
@@ -115,6 +118,9 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                         timeout=10
                     )
                     output = (result.stdout + result.stderr).lower()
+                    logger.debug(f"7z t 命令返回码: {result.returncode}, 文件: {file_path}")
+                    logger.debug(f"7z t stdout: {result.stdout[:200]}")
+                    logger.debug(f"7z t stderr: {result.stderr[:200]}")
                     if result.returncode != 0 and ('password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output):
                         logger.debug(f"7z t 检测为加密: {file_path}")
                         return True, True
