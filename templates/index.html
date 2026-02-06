@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FNOS 批量解压工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .version-badge {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+
+        .section-title::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 20px;
+            background: #667eea;
+            border-radius: 2px;
+            margin-right: 10px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .archive-list {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .archive-item {
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background-color 0.2s;
+        }
+
+        .archive-item:hover {
+            background-color: #f9f9f9;
+        }
+
+        .archive-item:last-child {
+            border-bottom: none;
+        }
+
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .archive-info {
+            flex: 1;
+        }
+
+        .archive-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .archive-meta {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-encrypted {
+            background: #fed7aa;
+            color: #92400e;
+        }
+
+        .badge-ok {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .status-card {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            text-align: center;
+        }
+
+        .status-card h3 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .status-card p {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .progress-container {
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #f0f0f0;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .task-log {
+            background: #f5f5f5;
+            border-radius: 6px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .debug-panel {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 360px;
+            height: 100vh;
+            background: #0f172a;
+            color: #e2e8f0;
+            border-left: 1px solid #1f2937;
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            box-shadow: -6px 0 20px rgba(0, 0, 0, 0.25);
+        }
+
+        .debug-panel-header {
+            padding: 12px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            background: #111827;
+            border-bottom: 1px solid #1f2937;
+        }
+
+        .debug-panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-item {
+            padding: 5px 0;
+            border-bottom: 1px solid #e0e0e0;
+            color: #666;
+        }
+
+        .log-item.success {
+            color: #10b981;
+        }
+
+        .log-item.error {
+            color: #ef4444;
+        }
+
+        .log-item.processing {
+            color: #667eea;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+        }
+
+        .empty-state svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.4);
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-close {
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .modal-close:hover {
+            color: #333;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 300px;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .tab-btn {
+            padding: 10px 15px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            color: #999;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab-btn.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .cache-item {
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .subdir-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .subdir-item {
+            padding: 10px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .subdir-item:hover {
+            background: #f9f9f9;
+        }
+
+        .subdir-item:last-child {
+            border-bottom: none;
+        }
+
+        .badge-count {
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        @media (max-width: 600px) {
+            .status-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .input-group {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            .modal-content {
+                width: 95%;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="version-badge">v1.2.5</div>
+            <h1>📦 FNOS 批量解压</h1>
+            <p>智能递归扫描 • 密码自动检测 • 多卷支持 • 批量解压</p>
+        </div>
+
+        <div class="content">
+            <!-- 配置部分 -->
+            <div class="section">
+                <div class="section-title">扫描设置</div>
+                <div class="input-group">
+                    <input type="text" id="scanPath" placeholder="输入目录路径 (如: /vol1/1000/Temp)" value="/vol1/1000/Temp">
+                    <button class="btn-primary" onclick="scanDirectory()">🔍 扫描</button>
+                    <button class="btn-secondary" onclick="openSettingsModal()">⚙️ 设置</button>
+                </div>
+                <div style="margin-top: 12px;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="includeSubdirs" checked style="margin-right: 8px; cursor: pointer;">
+                        <span>包含子目录（勾选时递归扫描所有子目录）</span>
+                    </label>
+                </div>
+                <div style="margin-top: 8px;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="debugMode" style="margin-right: 8px; cursor: pointer;" onchange="toggleDebugMode()">
+                        <span>🐞 调试模式（开启后右侧显示实时日志）</span>
+                    </label>
+                </div>
+                <small style="color: #999;">将扫描该目录下所有 .7z, .rar, .zip 等压缩文件</small>
+            </div>
+
+            <!-- 统计部分 -->
+            <div class="status-grid" id="statusGrid" style="display: none;">
+                <div class="status-card">
+                    <h3 id="totalCount">0</h3>
+                    <p>总文件数</p>
+                </div>
+                <div class="status-card">
+                    <h3 id="encryptedCount">0</h3>
+                    <p>加密文件</p>
+                </div>
+                <div class="status-card">
+                    <h3 id="multipartCount">0</h3>
+                    <p>多卷文件</p>
+                </div>
+                <div class="status-card">
+                    <h3 id="selectedCount">0</h3>
+                    <p>已选择</p>
+                </div>
+            </div>
+
+            <!-- 子目录信息 -->
+            <div class="section" id="subdirSection" style="display: none;">
+                <div class="section-title">子目录检测</div>
+                <p style="margin-bottom: 10px; color: #999; font-size: 12px;">
+                    发现 <strong id="subdirCountText">0</strong> 个含压缩包的子目录
+                </p>
+                <div class="subdir-list" id="subdirList"></div>
+            </div>
+
+            <!-- 文件列表 -->
+            <div class="section" id="listSection" style="display: none;">
+                <div class="section-title">压缩包列表</div>
+                <div id="archiveList" class="archive-list"></div>
+                <div class="controls">
+                    <button class="btn-secondary" onclick="selectAll()">✓ 全选</button>
+                    <button class="btn-secondary" onclick="deselectAll()">✗ 取消选择</button>
+                    <button class="btn-secondary" onclick="selectEncrypted()">🔐 仅选密码</button>
+                </div>
+            </div>
+
+            <!-- 提取路径 -->
+            <div class="section" id="extractSection" style="display: none;">
+                <div class="section-title">解压设置</div>
+                <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
+                    <div style="margin-bottom: 10px;">
+                        <label style="margin-right: 18px; cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到当前文件夹
+                        </label>
+                        <label style="margin-right: 18px; cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到同名文件夹
+                        </label>
+                        <label style="cursor: pointer;">
+                            <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked onchange="toggleExtractPath()">解压到指定目录
+                        </label>
+                    </div>
+                    <div id="extractPathGroup" class="input-group" style="margin-bottom: 0; margin-top: 10px;">
+                        <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
+                    </div>
+                    <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
+                    <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
+                        <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
+                        <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
+                    </label>
+                    <small style="color: #999; margin-left: 24px; display: block;">勾选后，成功解压的压缩包将被自动删除（请谨慎使用）</small>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="section" id="actionSection" style="display: none;">
+                <button class="btn-success" onclick="startExtraction()" style="width: 100%; font-size: 16px; padding: 15px;">
+                    ▶️ 开始批量解压
+                </button>
+            </div>
+
+            <!-- 进度部分 -->
+            <div class="section" id="progressSection" style="display: none;">
+                <div class="section-title">解压进度</div>
+                <div class="progress-container">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span id="progressText">0/0</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                </div>
+                <div class="task-log" id="taskLog"></div>
+                
+                <!-- 控制按钮 -->
+                <div class="controls" style="margin-top: 20px;">
+                    <button class="btn-secondary" id="pauseBtn" onclick="pauseExtraction()" style="flex: 1;">⏸️ 暂停</button>
+                    <button class="btn-secondary" id="resumeBtn" onclick="resumeExtraction()" style="flex: 1; display: none;">▶️ 继续</button>
+                    <button class="btn-danger" onclick="stopExtraction()" style="flex: 1;">⏹️ 停止</button>
+                    <button class="btn-secondary" onclick="showLogs()" style="flex: 1;">📋 日志</button>
+                    <button class="btn-secondary" onclick="downloadLogs()" style="flex: 1;">⬇️ 下载</button>
+                </div>
+            </div>
+
+            <!-- 空状态 -->
+            <div class="empty-state" id="emptyState">
+                <p>👈 输入目录路径并点击"扫描"开始</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 调试日志面板 -->
+    <div id="debugLogPanel" class="debug-panel" style="display: none;">
+        <div class="debug-panel-header">🐞 调试日志（实时）</div>
+        <div class="debug-panel-body" id="debugLogContent">调试模式已开启，日志加载中...</div>
+    </div>
+
+    <!-- 设置模态框 -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                ⚙️ 高级设置
+                <span class="modal-close" onclick="closeSettingsModal()">✕</span>
+            </div>
+            
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('dir-tab')">📁 目录管理</button>
+                <button class="tab-btn" onclick="switchTab('pwd-tab')">🔐 密码本</button>
+                <button class="tab-btn" onclick="switchTab('concurrent-tab')">⚡ 并发</button>
+                <button class="tab-btn" onclick="switchTab('cache-tab')">💾 缓存</button>
+            </div>
+
+            <!-- 目录管理标签 -->
+            <div id="dir-tab" class="tab-content active">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">常用目录</h3>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <button class="btn-secondary" onclick="setDefaultDir('/vol1/1000/Temp')" style="text-align: left;">
+                            📂 /vol1/1000/Temp
+                        </button>
+                        <button class="btn-secondary" onclick="setDefaultDir('/home')" style="text-align: left;">
+                            📂 /home
+                        </button>
+                        <button class="btn-secondary" onclick="setDefaultDir('/tmp')" style="text-align: left;">
+                            📂 /tmp
+                        </button>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="customDir" placeholder="或输入自定义目录" style="flex: 1;">
+                            <button class="btn-primary" onclick="setDefaultDir(document.getElementById('customDir').value)">设置</button>
+                        </div>
+                    </div>
+                    <p style="margin-top: 15px; font-size: 12px; color: #999;">
+                        当前目录: <strong id="currentDirText">/vol1/1000/Temp</strong>
+                    </p>
+                </div>
+            </div>
+
+            <!-- 密码本标签 -->
+            <div id="pwd-tab" class="tab-content">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">
+                        编辑密码词典 (<span id="pwdCountText">0</span> 个)
+                    </h3>
+                    <textarea id="passwordsTextarea" placeholder="每行一个密码..."></textarea>
+                    <p style="margin-top: 10px; font-size: 12px; color: #999;">
+                        💡 提示: 每行一个密码，修改后点击保存
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
+                    <button class="btn-primary" onclick="savePasswords()">💾 保存</button>
+                </div>
+            </div>
+
+            <!-- 并发设置标签 -->
+            <div id="concurrent-tab" class="tab-content">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 20px; color: #333; font-size: 14px;">⚡ 并发解压数量</h3>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <label style="font-size: 14px; color: #555; min-width: 150px;">
+                            同时解压文件数:
+                        </label>
+                        <input type="number" id="concurrentInput" min="1" max="32" value="1" 
+                               style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        <span style="font-size: 12px; color: #999;">(1-32)</span>
+                    </div>
+                    <p style="margin-top: 20px; font-size: 12px; color: #999;">
+                        💡 设置同时解压的文件数量。数值越大并发度越高，但会消耗更多系统资源。<br/>
+                        推荐值: 单核 1-2 个, 4核 2-4 个, 8核+ 4-8 个
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
+                    <button class="btn-primary" onclick="saveConcurrentSettings()">💾 保存</button>
+                </div>
+            </div>
+
+            <!-- 缓存标签 -->
+            <div id="cache-tab" class="tab-content">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">
+                        成功密码缓存 (<span id="cacheCountText">0</span> 个)
+                    </h3>
+                    <div id="cacheList" class="subdir-list" style="max-height: 400px;">
+                        <p style="text-align: center; color: #999; padding: 20px;">加载中...</p>
+                    </div>
+                    <p style="margin-top: 10px; font-size: 12px; color: #999;">
+                        ⚡ 已成功解压的文件会缓存其密码，下次可直接使用
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-danger" onclick="clearCache()">🗑️ 清空缓存</button>
+                    <button class="btn-secondary" onclick="closeSettingsModal()">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+                // 解压路径输入框联动
+                function toggleExtractPath() {
+                    const group = document.getElementById('extractPathGroup');
+                    if (document.getElementById('modeSpecified').checked) {
+                        group.style.display = '';
+                    } else {
+                        group.style.display = 'none';
+                    }
+                }
+                // 页面加载时初始化一次
+                document.addEventListener('DOMContentLoaded', () => {
+                    toggleExtractPath();
+                    document.getElementById('scanPath').focus();
+                });
+        let archives = [];
+        let currentTask = null;
+        let currentPath = '/vol1/1000/Temp';
+        let debugMode = false;
+        let debugLogTimer = null;
+        let debugLogBuffer = '';
+        let lastLogSnapshot = '';
+
+        // ===== 模态框管理 =====
+        function openSettingsModal() {
+            document.getElementById('settingsModal').classList.add('active');
+            document.getElementById('currentDirText').textContent = currentPath;
+            loadPasswordsForEdit();
+            loadCacheForDisplay();
+            loadConcurrentSettings();
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').classList.remove('active');
+        }
+
+        function switchTab(tabName) {
+            // 隐藏所有内容
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            // 显示选中的标签
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // ===== 目录管理 =====
+        function setDefaultDir(path) {
+            if (!path || path.trim() === '') {
+                alert('请输入有效的路径');
+                return;
+            }
+            currentPath = path.trim();
+            document.getElementById('scanPath').value = currentPath;
+            document.getElementById('currentDirText').textContent = currentPath;
+            alert('已切换到: ' + currentPath);
+        }
+
+        // ===== 密码本管理 =====
+        async function loadPasswordsForEdit() {
+            try {
+                const response = await fetch('/api/passwords');
+                const data = await response.json();
+                document.getElementById('passwordsTextarea').value = data.passwords.join('\n');
+                document.getElementById('pwdCountText').textContent = data.count;
+            } catch (e) {
+                alert('加载密码本失败: ' + e.message);
+            }
+        }
+
+        async function savePasswords() {
+            const passwordText = document.getElementById('passwordsTextarea').value;
+            const passwords = passwordText.split('\n').filter(p => p.trim());
+            
+            try {
+                const response = await fetch('/api/passwords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passwords })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ ' + data.message);
+                    document.getElementById('pwdCountText').textContent = data.count;
+                } else {
+                    alert('❌ 保存失败: ' + data.error);
+                }
+            } catch (e) {
+                alert('保存失败: ' + e.message);
+            }
+        }
+
+        // ===== 缓存管理 =====
+        async function loadCacheForDisplay() {
+            try {
+                const response = await fetch('/api/password-cache');
+                const data = await response.json();
+                document.getElementById('cacheCountText').textContent = data.count;
+                
+                if (data.count === 0) {
+                    document.getElementById('cacheList').innerHTML = 
+                        '<p style="text-align: center; color: #999; padding: 20px;">暂无缓存</p>';
+                    return;
+                }
+                
+                const cacheHtml = Object.entries(data.cache).map(([file, pwd]) => `
+                    <div class="cache-item">
+                        <span>
+                            <strong>${file.split('/').pop()}</strong><br>
+                            <span style="color: #999; font-size: 10px;">${file}</span>
+                        </span>
+                        <span style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
+                            ${pwd}
+                        </span>
+                    </div>
+                `).join('');
+                
+                document.getElementById('cacheList').innerHTML = cacheHtml;
+            } catch (e) {
+                alert('加载缓存失败: ' + e.message);
+            }
+        }
+
+        async function clearCache() {
+            if (!confirm('确定要清空所有缓存吗？')) return;
+            
+            try {
+                const response = await fetch('/api/password-cache', { method: 'DELETE' });
+                const data = await response.json();
+                alert('✅ ' + data.message);
+                loadCacheForDisplay();
+            } catch (e) {
+                alert('清空失败: ' + e.message);
+            }
+        }
+
+        // ===== 并发设置 =====
+        async function saveConcurrentSettings() {
+            const concurrentCount = parseInt(document.getElementById('concurrentInput').value);
+            
+            if (!concurrentCount || concurrentCount < 1 || concurrentCount > 32) {
+                alert('❌ 并发数必须在 1-32 之间');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ concurrent_count: concurrentCount })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert(`✅ 并发数已设置为 ${data.concurrent_count}`);
+                    closeSettingsModal();
+                } else {
+                    alert('❌ 设置失败: ' + data.error);
+                }
+            } catch (e) {
+                alert('设置失败: ' + e.message);
+            }
+        }
+
+        // 初始化并发数显示
+        async function loadConcurrentSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const data = await response.json();
+                document.getElementById('concurrentInput').value = data.concurrent_count || 1;
+            } catch (e) {
+                console.error('加载并发设置失败: ' + e.message);
+            }
+        }
+        async function scanDirectory() {
+            const path = document.getElementById('scanPath').value.trim();
+            if (!path) {
+                alert('请输入目录路径');
+                return;
+            }
+
+            currentPath = path;
+            document.getElementById('emptyState').style.display = 'none';
+            
+            // 显示扫描中状态
+            document.getElementById('listSection').style.display = 'block';
+            document.getElementById('archiveList').innerHTML = '<div class="empty-state"><p>🔄 正在扫描中...</p></div>';
+            document.getElementById('statusGrid').style.display = 'grid';
+            document.getElementById('totalCount').textContent = '...';
+            document.getElementById('encryptedCount').textContent = '...';
+            document.getElementById('selectedCount').textContent = '0';
+            document.getElementById('extractSection').style.display = 'block';
+            document.getElementById('actionSection').style.display = 'block';
+
+            try {
+                const include_subdirs = document.getElementById('includeSubdirs').checked;
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, include_subdirs })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('错误: ' + data.error);
+                    return;
+                }
+
+                archives = data.archives;
+                renderArchiveList();
+                updateStats();
+                
+                // 显示子目录信息（仅在勾选包含子目录时显示）
+                if (include_subdirs && data.subdirs_count > 0) {
+                    document.getElementById('subdirSection').style.display = 'block';
+                    document.getElementById('subdirCountText').textContent = data.subdirs_count;
+                    renderSubdirectories(data.subdirs_with_archives);
+                } else {
+                    document.getElementById('subdirSection').style.display = 'none';
+                }
+            } catch (e) {
+                alert('扫描失败: ' + e.message);
+            }
+        }
+
+        function renderSubdirectories(subdirs) {
+            const html = Object.entries(subdirs).map(([name, count]) => `
+                <div class="subdir-item" onclick="document.getElementById('scanPath').value = currentPath + '/' + '${name}'; scanDirectory();">
+                    <span>📁 ${name}</span>
+                    <span class="badge-count">${count}</span>
+                </div>
+            `).join('');
+            
+            document.getElementById('subdirList').innerHTML = html;
+        }
+
+        function renderArchiveList() {
+            const listHtml = archives.map((archive, idx) => `
+                <div class="archive-item">
+                    <input type="checkbox" class="checkbox archive-checkbox" data-index="${idx}" onchange="updateStats()">
+                    <div class="archive-info">
+                        <div class="archive-name">${archive.name}</div>
+                        <div class="archive-meta">${archive.path}</div>
+                        <div class="archive-meta">大小: ${formatSize(archive.size)}</div>
+                    </div>
+                    ${archive.is_multipart ? `<span class="badge" style="background: #dbeafe; color: #0369a1;">📦 多卷 (${archive.volume_count}卷)</span>` : ''}
+                    ${archive.encrypted === true ? '<span class="badge badge-encrypted">🔐 加密</span>' : 
+                      archive.encrypted === false ? '<span class="badge badge-ok">✓ 无密</span>' : ''}
+                    ${archive.cached ? '<span class="badge" style="background: #c7d2fe; color: #4338ca;">💾 缓存</span>' : ''}
+                </div>
+            `).join('');
+
+            document.getElementById('archiveList').innerHTML = listHtml || '<div class="empty-state"><p>未找到压缩包</p></div>';
+        }
+
+        function updateStats() {
+            const encrypted = archives.filter(a => a.encrypted === true).length;
+            const multipart = archives.filter(a => a.is_multipart === true).length;
+            const selected = document.querySelectorAll('.archive-checkbox:checked').length;
+
+            document.getElementById('totalCount').textContent = archives.length;
+            document.getElementById('encryptedCount').textContent = encrypted;
+            document.getElementById('multipartCount').textContent = multipart;
+            document.getElementById('selectedCount').textContent = selected;
+        }
+
+        function selectAll() {
+            document.querySelectorAll('.archive-checkbox').forEach(cb => cb.checked = true);
+            updateStats();
+        }
+
+        function deselectAll() {
+            document.querySelectorAll('.archive-checkbox').forEach(cb => cb.checked = false);
+            updateStats();
+        }
+
+        function selectEncrypted() {
+            document.querySelectorAll('.archive-checkbox').forEach((cb, idx) => {
+                cb.checked = archives[idx].encrypted === true;
+            });
+            updateStats();
+        }
+
+        // ===== 解压控制 =====
+        let isPaused = false;
+
+        async function pauseExtraction() {
+            try {
+                const response = await fetch('/api/extraction/pause', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    isPaused = true;
+                    document.getElementById('pauseBtn').style.display = 'none';
+                    document.getElementById('resumeBtn').style.display = 'block';
+                    alert('已暂停解压');
+                }
+            } catch (e) {
+                alert('暂停失败: ' + e.message);
+            }
+        }
+
+        async function resumeExtraction() {
+            try {
+                const response = await fetch('/api/extraction/resume', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    isPaused = false;
+                    document.getElementById('pauseBtn').style.display = 'block';
+                    document.getElementById('resumeBtn').style.display = 'none';
+                    alert('已继续解压');
+                }
+            } catch (e) {
+                alert('继续失败: ' + e.message);
+            }
+        }
+
+        async function stopExtraction() {
+            if (!confirm('确定要停止解压吗？')) return;
+            try {
+                const response = await fetch('/api/extraction/stop', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('已停止解压');
+                    // 重置状态
+                    await fetch('/api/extraction/reset', { method: 'POST' });
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1000);
+                }
+            } catch (e) {
+                alert('停止失败: ' + e.message);
+            }
+        }
+
+        // ===== 调试日志 =====
+        function toggleDebugMode() {
+            debugMode = document.getElementById('debugMode').checked;
+            const panel = document.getElementById('debugLogPanel');
+
+            if (debugMode) {
+                panel.style.display = 'flex';
+                debugLogBuffer = '';
+                lastLogSnapshot = '';
+                fetchDebugLogs();
+                if (!debugLogTimer) {
+                    debugLogTimer = setInterval(fetchDebugLogs, 3000);
+                }
+            } else {
+                panel.style.display = 'none';
+                if (debugLogTimer) {
+                    clearInterval(debugLogTimer);
+                    debugLogTimer = null;
+                }
+            }
+        }
+
+        async function fetchDebugLogs() {
+            if (!debugMode) return;
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                const logs = data.logs || '';
+                if (!logs || logs === lastLogSnapshot) return;
+
+                const marker = lastLogSnapshot.slice(-1000);
+                if (marker && logs.includes(marker)) {
+                    const idx = logs.indexOf(marker);
+                    debugLogBuffer += logs.slice(idx + marker.length);
+                } else if (lastLogSnapshot) {
+                    debugLogBuffer += '\n' + logs;
+                } else {
+                    debugLogBuffer = logs;
+                }
+
+                lastLogSnapshot = logs;
+
+                if (debugLogBuffer.length > 200000) {
+                    debugLogBuffer = debugLogBuffer.slice(-200000);
+                }
+
+                const logContent = document.getElementById('debugLogContent');
+                logContent.textContent = debugLogBuffer.trim() || '暂无日志';
+                logContent.scrollTop = logContent.scrollHeight;
+            } catch (e) {
+                const logContent = document.getElementById('debugLogContent');
+                logContent.textContent = '获取日志失败: ' + e.message;
+            }
+        }
+
+        async function showLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                const logText = data.logs || '无日志';
+                alert(logText.substring(0, 2000)); // 显示前 2000 字符
+            } catch (e) {
+                alert('获取日志失败: ' + e.message);
+            }
+        }
+
+        function downloadLogs() {
+            window.location.href = '/api/logs/download';
+        }
+
+        // ===== 解压操作 =====
+        async function startExtraction() {
+            const selected = Array.from(document.querySelectorAll('.archive-checkbox:checked'))
+                .map(cb => archives[parseInt(cb.dataset.index)].path);
+
+            if (selected.length === 0) {
+                alert('请选择至少一个文件');
+                return;
+            }
+
+            const extractTo = document.getElementById('extractPath').value.trim() || '/vol1/1000/Temp';
+            const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
+            let extractMode = 'to_specified';
+            if (document.getElementById('modeCurrent').checked) extractMode = 'to_current';
+            else if (document.getElementById('modeSameName').checked) extractMode = 'to_same_name';
+
+            document.getElementById('listSection').style.display = 'none';
+            document.getElementById('actionSection').style.display = 'none';
+            document.getElementById('progressSection').style.display = 'block';
+            document.getElementById('pauseBtn').style.display = 'block';
+            document.getElementById('resumeBtn').style.display = 'none';
+            isPaused = false;
+
+            try {
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        archives: selected, 
+                        extract_to: extractTo,
+                        extract_mode: extractMode,
+                        auto_delete_success: autoDeleteSuccess
+                    })
+                });
+
+                const text = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (err) {
+                    alert('启动解压失败: ' + text);
+                    return;
+                }
+
+                currentTask = data;
+                monitorProgress();
+            } catch (e) {
+                alert('启动解压失败: ' + e.message);
+            }
+        }
+
+        async function monitorProgress() {
+            let completed = 0;
+            const total = currentTask.task_count;
+            let finalStatus = {};
+
+            while (completed < total) {
+                const response = await fetch('/api/status');
+                const status = await response.json();
+                finalStatus = status;
+
+                let successCount = 0;
+                const logs = [];
+
+                for (const [taskId, taskStatus] of Object.entries(status)) {
+                    if (taskStatus.status === 'success') successCount++;
+                    
+                    const icon = taskStatus.status === 'success' ? '✓' :
+                                 taskStatus.status === 'error' ? '✗' :
+                                 taskStatus.status === 'failed' ? '✗' : '⏳';
+                    
+                    logs.push(`${icon} ${taskStatus.file.split('/').pop()}: ${taskStatus.message}`);
+                }
+
+                completed = successCount + Object.values(status).filter(s => s.status === 'failed' || s.status === 'error').length;
+
+                document.getElementById('progressFill').style.width = (completed / total * 100) + '%';
+                document.getElementById('progressPercent').textContent = Math.round(completed / total * 100) + '%';
+                document.getElementById('progressText').textContent = `${completed}/${total}`;
+                document.getElementById('taskLog').innerHTML = logs.map(log => `<div class="log-item">${log}</div>`).join('');
+
+                if (completed >= total) break;
+
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            // 生成成功失败清单
+            const successList = [];
+            const failList = [];
+            const successFiles = [];
+            for (const [taskId, taskStatus] of Object.entries(finalStatus)) {
+                const fileName = taskStatus.file.split('/').pop();
+                if (taskStatus.status === 'success') {
+                    successList.push(fileName);
+                    successFiles.push(taskStatus.file);
+                } else {
+                    failList.push(`${fileName} (${taskStatus.message})`);
+                }
+            }
+
+            let summaryMsg = `✅ 解压完成!\n\n`;
+            if (successList.length > 0) {
+                summaryMsg += `✓ 成功 (${successList.length}): ${successList.join(', ')}\n`;
+            }
+            if (failList.length > 0) {
+                summaryMsg += `\n✗ 失败 (${failList.length}):\n${failList.join('\n')}`;
+            }
+
+            setTimeout(() => {
+                // 如果有成功的解压且启用了自动删除，则显示删除确认
+                const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
+                if (successFiles.length > 0 && autoDeleteSuccess) {
+                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
+                        deleteSuccessfulArchives(successFiles);
+                    }
+                } else if (successFiles.length > 0) {
+                    // 即使没启用自动删除，也给用户删除的选项
+                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
+                        deleteSuccessfulArchives(successFiles);
+                    }
+                } else {
+                    alert(summaryMsg);
+                }
+            }, 1000);
+        }
+
+        async function deleteSuccessfulArchives(files) {
+            try {
+                const response = await fetch('/api/delete-archives', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files })
+                });
+                const data = await response.json();
+                alert(data.message || '✅ 已删除压缩包');
+            } catch (e) {
+                alert('❌ 删除失败: ' + e.message);
+            } finally {
+                location.reload();
+            }
+        }
+
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // 点击模态框外部关闭
+        window.onclick = function(event) {
+            const modal = document.getElementById('settingsModal');
+            if (event.target == modal) {
+                modal.classList.remove('active');
+            }
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('scanPath').focus();
+        });
+    </script>
+</body>
+</html>
