@@ -915,10 +915,10 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
         # 处理加密压缩包
         if is_encrypted:
             with extraction_lock:
-                extraction_status[task_id]['message'] = '需要密码，正在尝试... (每个密码5秒超时)'
+                extraction_status[task_id]['message'] = f'需要密码，正在尝试... (每个密码{PASSWORD_TIMEOUT}秒超时)'
             
-            # 每个密码有独立的5秒超时
-            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=5)
+            # 每个密码有独立的超时控制
+            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=PASSWORD_TIMEOUT)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
