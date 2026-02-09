@@ -153,6 +153,8 @@ extraction_settings = {
     'concurrent_count': 1  # 并发解压文件数量（默认1个）
 }
 encryption_cache = {}  # {file_path: (mtime, size, is_encrypted)}
+encryption_cache_lock = threading.Lock()  # 保护 encryption_cache 的线程锁
+detecting_files = set()  # 正在检测中的文件集合，避免重复检测
 control_lock = threading.Lock()
 
 # ========================================
@@ -466,7 +468,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     ['7z', 'l', '-y', file_path],
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=10  # 降低超时时间从30秒到10秒
                 )
                 output = (result.stdout + result.stderr).lower()
                 logger.debug(f"7z l 命令返回码: {result.returncode}, 文件: {file_path}")
@@ -484,9 +486,14 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     return True, True
                 logger.debug(f"7z 文件检测为无加密: {file_path}")
                 return True, False
+            except subprocess.TimeoutExpired:
+                logger.warning(f"7z l 检测超时 (10秒)，跳过文件: {file_path}")
+                # 超时的文件缓存为"无法检测"，避免重复尝试
+                _set_cached_encryption(file_path, False)  # 标记为False避免进入密码破解
+                return True, False  # 返回False表示不加密，实际是跳过
             except Exception as e:
-                logger.warning(f"7z l 检测异常，假设文件可能加密: {e}")
-                # 超时或任何异常都假设可能加密，自动进入密码尝试流程
+                logger.warning(f"7z l 检测异常: {e}")
+                # 其他异常假设可能加密
                 return True, True
             
         elif file_name.endswith('.zip'):
@@ -759,21 +766,38 @@ def _is_archive_file(file_name: str, all_exts: Tuple[str, ...]) -> bool:
     return name.endswith(all_exts)
 
 def _get_cached_encryption(file_path: str) -> Optional[bool]:
-    try:
-        stat = os.stat(file_path)
-        cached = encryption_cache.get(file_path)
-        if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
-            return cached[2]
-    except (OSError, PermissionError):
+    """获取缓存的加密状态（线程安全）"""
+    with encryption_cache_lock:
+        try:
+            stat = os.stat(file_path)
+            cached = encryption_cache.get(file_path)
+            if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+                return cached[2]
+        except (OSError, PermissionError):
+            return None
         return None
-    return None
 
 def _set_cached_encryption(file_path: str, is_encrypted: Optional[bool]) -> None:
-    try:
-        stat = os.stat(file_path)
-        encryption_cache[file_path] = (stat.st_mtime, stat.st_size, is_encrypted)
-    except (OSError, PermissionError):
-        return
+    """设置缓存的加密状态（线程安全）"""
+    with encryption_cache_lock:
+        try:
+            stat = os.stat(file_path)
+            encryption_cache[file_path] = (stat.st_mtime, stat.st_size, is_encrypted)
+        except (OSError, PermissionError):
+            return
+            
+def _is_detecting(file_path: str) -> bool:
+    """检查文件是否正在检测中"""
+    with encryption_cache_lock:
+        return file_path in detecting_files
+        
+def _mark_detecting(file_path: str, detecting: bool) -> None:
+    """标记文件检测状态"""
+    with encryption_cache_lock:
+        if detecting:
+            detecting_files.add(file_path)
+        else:
+            detecting_files.discard(file_path)
 
 def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
     """
@@ -995,11 +1019,22 @@ def scan_directory():
     single_result = []
     for archive in single_archives:
         try:
+            # 检查是否正在检测中，避免重复检测
+            if _is_detecting(archive):
+                logger.debug(f"文件正在检测中，跳过: {archive}")
+                continue
+                
             cached_enc = _get_cached_encryption(archive)
             if cached_enc is None:
-                is_arch, is_enc = is_archive_encrypted(archive)
-                if is_arch:
-                    _set_cached_encryption(archive, is_enc)
+                # 标记为检测中
+                _mark_detecting(archive, True)
+                try:
+                    is_arch, is_enc = is_archive_encrypted(archive)
+                    if is_arch:
+                        _set_cached_encryption(archive, is_enc)
+                finally:
+                    # 检测完成，移除标记
+                    _mark_detecting(archive, False)
             else:
                 is_arch, is_enc = True, cached_enc
 
@@ -1023,12 +1058,21 @@ def scan_directory():
     multipart_result = []
     for group in multipart_groups:
         try:
+            # 检查是否正在检测中
+            if _is_detecting(group['first_volume']):
+                logger.debug(f"文件正在检测中，跳过: {group['first_volume']}")
+                continue
+                
             # 检测第一卷是否加密（带缓存）
             cached_enc = _get_cached_encryption(group['first_volume'])
             if cached_enc is None:
-                is_arch, is_enc = is_archive_encrypted(group['first_volume'])
-                if is_arch:
-                    _set_cached_encryption(group['first_volume'], is_enc)
+                _mark_detecting(group['first_volume'], True)
+                try:
+                    is_arch, is_enc = is_archive_encrypted(group['first_volume'])
+                    if is_arch:
+                        _set_cached_encryption(group['first_volume'], is_enc)
+                finally:
+                    _mark_detecting(group['first_volume'], False)
             else:
                 is_arch, is_enc = True, cached_enc
 
