@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.91
+版本: 1.2.92
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -469,37 +469,47 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
         file_name = Path(file_path).name.lower()
         # 支持 7z/zip/rar 以及 tar 系列
         if file_name.endswith('.7z'):
-            # 先用7z l检测
+            # 使用 7z t 命令测试文件，而不是 l 命令
+            # -p- 表示无密码，如果文件加密则会失败
             try:
                 result = subprocess.run(
-                    ['7z', 'l', '-y', file_path],
+                    ['7z', 't', '-p-', file_path],
                     capture_output=True,
                     text=True,
                     timeout=3  # 加密检测超时设置为3秒
                 )
                 output = (result.stdout + result.stderr).lower()
-                logger.debug(f"7z l 命令返回码: {result.returncode}, 文件: {file_path}")
-                logger.debug(f"7z l stdout: {result.stdout[:200]}")
-                logger.debug(f"7z l stderr: {result.stderr[:200]}")
-                if result.returncode != 0:
-                    if 'password' in output or 'encrypted' in output or 'wrong password' in output or 'can not open encrypted archive' in output:
-                        logger.debug(f"7z 文件检测为加密 (返回码 {result.returncode}): {file_path}")
-                        return True, True
-                    logger.warning(f"7z 列出文件失败，返回码 {result.returncode}: {file_path}")
-                    # 命令失败时假设可能加密，自动进入密码尝试流程
+                stderr_output = result.stderr.lower()
+                
+                logger.debug(f"7z t 命令返回码: {result.returncode}, 文件: {file_path}")
+                
+                # 检查是否有明确的加密标志
+                if ('password' in output or 'encrypted' in output or 
+                    'wrong password' in output or 'can not open encrypted' in output or
+                    'cannot open encrypted' in output or 'enter password' in output):
+                    logger.info(f"7z 文件检测为加密: {file_path}")
                     return True, True
-                if 'password' in output or 'encrypted' in output or 'lock' in output or 'can not open encrypted archive' in output:
-                    logger.debug(f"7z 文件检测为加密（输出标志）: {file_path}")
+                
+                # 返回码为0表示测试成功，文件无加密
+                if result.returncode == 0:
+                    logger.debug(f"7z 文件检测为无加密: {file_path}")
+                    return True, False
+                
+                # 返回码不为0，检查是否是加密相关错误
+                if result.returncode == 2:  # 7z 的加密错误代码
+                    logger.info(f"7z 文件检测为加密 (返回码 2): {file_path}")
                     return True, True
-                logger.debug(f"7z 文件检测为无加密: {file_path}")
-                return True, False
+                
+                # 其他错误，假设可能加密（谨慎处理）
+                logger.warning(f"7z 测试失败，假设可能加密，返回码 {result.returncode}: {file_path}")
+                return True, True
+                
             except subprocess.TimeoutExpired:
-                logger.warning(f"7z l 检测超时 (3秒)，跳过文件: {file_path}")
-                # 超时的文件缓存为"无法检测"，避免重复尝试
-                _set_cached_encryption(file_path, False)  # 标记为False避免进入密码破解
-                return True, False  # 返回False表示不加密，实际是跳过
+                logger.warning(f"7z t 检测超时 (3秒)，假设可能加密: {file_path}")
+                # 超时的文件标记为可能加密，进入密码尝试
+                return True, True
             except Exception as e:
-                logger.warning(f"7z l 检测异常: {e}")
+                logger.warning(f"7z t 检测异常，假设可能加密: {e}")
                 # 其他异常假设可能加密
                 return True, True
             
@@ -588,12 +598,14 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     
     return False, None
 
-def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = None) -> Tuple[bool, str]:
+def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = None, timeout: Optional[int] = None) -> Tuple[bool, str]:
     """
     解压文件
     返回: (成功, 消息)
+    timeout: 自定义超时时间，如果为None则使用默认的EXTRACTION_TIMEOUT
     """
     try:
+        actual_timeout = timeout if timeout is not None else EXTRACTION_TIMEOUT
         file_name = Path(file_path).name.lower()
         cmd = []
 
@@ -602,6 +614,8 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
             cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}']
             if password:
                 cmd.append(f'-p{password}')
+            else:
+                cmd.append('-p-')  # 明确指定无密码
 
         # RAR格式
         elif file_name.endswith('.rar'):
@@ -658,7 +672,7 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         else:
             return False, "不支持的格式"
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=EXTRACTION_TIMEOUT)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=actual_timeout)
 
         if result.returncode == 0:
             logger.info(f"成功解压: {file_path}")
@@ -667,18 +681,24 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
             error_output = (result.stderr + result.stdout).lower()
             
             # 检查是否是密码相关错误
-            if password and ('password' in error_output or 'wrong password' in error_output or
-                           'incorrect' in error_output or 'encrypted' in error_output or '密码' in error_output):
-                logger.warning(f"密码错误 [{file_path}]")
-                return False, "密码错误"
+            if ('password' in error_output or 'wrong password' in error_output or
+                'incorrect' in error_output or 'encrypted' in error_output or 
+                '密码' in error_output or 'cannot open encrypted' in error_output or
+                'can not open encrypted' in error_output):
+                if password:
+                    logger.warning(f"密码错误 [{file_path}]")
+                    return False, "密码错误"
+                else:
+                    logger.warning(f"需要密码 [{file_path}]")
+                    return False, "需要密码"
             
             error_msg = result.stderr or result.stdout or "未知错误"
             logger.error(f"解压命令失败 [{file_path}]: 返回码 {result.returncode}\n命令: {' '.join(cmd)}\n错误: {error_msg}")
             return False, f"解压失败: {error_msg[:200]}"
             
     except subprocess.TimeoutExpired:
-        logger.error(f"解压超时: {file_path}")
-        return False, f"解压超时（{EXTRACTION_TIMEOUT}秒）"
+        logger.error(f"解压超时: {file_path} ({actual_timeout}秒)")
+        return False, f"解压超时（{actual_timeout}秒）"
     except Exception as e:
         logger.error(f"解压异常 {file_path}: {e}")
         return False, f"解压异常: {str(e)[:100]}"
@@ -696,7 +716,7 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
         logger.info(f"尝试缓存密码: {file_path}")
-        success, msg = extract_archive(file_path, extract_dir, cached_pwd)
+        success, msg = extract_archive(file_path, extract_dir, cached_pwd, timeout=timeout_per_password)
         if success:
             return True, "解压成功 (缓存密码)", cached_pwd
         retry_count += 1
@@ -710,7 +730,7 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
         
         try:
             # 每个密码尝试有独立的超时
-            success, msg = extract_archive(file_path, extract_dir, password)
+            success, msg = extract_archive(file_path, extract_dir, password, timeout=timeout_per_password)
             attempt_elapsed = time.time() - attempt_start
             
             if success:
@@ -1443,7 +1463,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.91',
+            'version': '1.2.92',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),
