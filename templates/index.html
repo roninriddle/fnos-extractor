@@ -401,6 +401,44 @@
         .modal-body {
             margin-bottom: 20px;
         }
+        
+        .completion-summary {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .summary-section {
+            margin-bottom: 15px;
+        }
+        
+        .summary-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .summary-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        
+        .summary-list {
+            font-size: 13px;
+            line-height: 1.6;
+            color: #666;
+        }
+        
+        .page-title-notification {
+            animation: blink 1s linear infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
 
         .modal-footer {
             display: flex;
@@ -766,6 +804,27 @@
         </div>
     </div>
 
+    <!-- 完成通知模态框 -->
+    <div id="completionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="completionTitle">✅ 解压完成</span>
+                <span class="modal-close" onclick="closeCompletionModal()">✕</span>
+            </div>
+            <div class="modal-body">
+                <div id="completionSummary" class="completion-summary"></div>
+                <div id="deleteQuestion" style="margin-top: 15px; padding: 15px; background: #fff3cd; border-radius: 6px; border: 1px solid #ffc107;">
+                    <strong>🗑️ 是否删除成功解压的压缩包？</strong>
+                    <p style="margin: 8px 0 0 0; font-size: 13px; color: #856404;">删除后无法恢复，请谨慎操作</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" onclick="confirmDeleteArchives()">🗑️ 删除压缩包</button>
+                <button class="btn-secondary" onclick="skipDelete()">保留文件</button>
+            </div>
+        </div>
+    </div>
+
     <script>
                 // 解压路径输入框联动
                 function toggleExtractPath() {
@@ -784,6 +843,19 @@
         let archives = [];
         let currentTask = null;
         let currentPath = '/vol1/1000/Temp';
+        let pendingCompletion = null;  // 待显示的完成通知
+        let originalTitle = document.title;
+        
+        // 页面可见性检测
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && pendingCompletion) {
+                // 用户切回页面，显示待处理的完成通知
+                showCompletionModal(pendingCompletion);
+                pendingCompletion = null;
+                // 恢复标题
+                document.title = originalTitle;
+            }
+        });
         let debugMode = false;
         let debugLogTimer = null;
         let debugLogBuffer = '';
@@ -800,6 +872,61 @@
 
         function closeSettingsModal() {
             document.getElementById('settingsModal').classList.remove('active');
+        }
+        
+        function closeCompletionModal() {
+            document.getElementById('completionModal').classList.remove('active');
+            pendingCompletion = null;
+            document.title = originalTitle;
+        }
+        
+        function showCompletionModal(completionData) {
+            const { summaryMsg, successFiles, successList, failList } = completionData;
+            
+            // 构建摘要HTML
+            let summaryHtml = '';
+            if (successList.length > 0) {
+                summaryHtml += `<div class="summary-section">
+                    <div class="summary-title">✓ 成功 (${successList.length})</div>
+                    <div class="summary-list">${successList.join('<br>')}</div>
+                </div>`;
+            }
+            if (failList.length > 0) {
+                summaryHtml += `<div class="summary-section">
+                    <div class="summary-title" style="color: #dc3545;">✗ 失败 (${failList.length})</div>
+                    <div class="summary-list" style="color: #dc3545;">${failList.join('<br>')}</div>
+                </div>`;
+            }
+            
+            document.getElementById('completionSummary').innerHTML = summaryHtml;
+            
+            // 如果没有成功的文件，隐藏删除选项
+            if (successFiles.length === 0) {
+                document.getElementById('deleteQuestion').style.display = 'none';
+                document.querySelector('#completionModal .modal-footer').innerHTML = 
+                    '<button class="btn-secondary" onclick="closeCompletionModal()">关闭</button>';
+            } else {
+                document.getElementById('deleteQuestion').style.display = 'block';
+                document.querySelector('#completionModal .modal-footer').innerHTML = 
+                    '<button class="btn-primary" onclick="confirmDeleteArchives()">🗑️ 删除压缩包</button>' +
+                    '<button class="btn-secondary" onclick="skipDelete()">保留文件</button>';
+            }
+            
+            // 显示模态框
+            document.getElementById('completionModal').classList.add('active');
+        }
+        
+        function confirmDeleteArchives() {
+            if (pendingCompletion && pendingCompletion.successFiles) {
+                deleteSuccessfulArchives(pendingCompletion.successFiles);
+            }
+            closeCompletionModal();
+        }
+        
+        function skipDelete() {
+            closeCompletionModal();
+            // 刷新页面以显示最新状态
+            setTimeout(() => location.reload(), 300);
         }
 
         function switchTab(tabName) {
@@ -1280,22 +1407,34 @@
                 summaryMsg += `\n✗ 失败 (${failList.length}):\n${failList.join('\n')}`;
             }
 
-            setTimeout(() => {
-                // 如果有成功的解压且启用了自动删除，则显示删除确认
-                const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
-                if (successFiles.length > 0 && autoDeleteSuccess) {
-                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
-                        deleteSuccessfulArchives(successFiles);
-                    }
-                } else if (successFiles.length > 0) {
-                    // 即使没启用自动删除，也给用户删除的选项
-                    if (confirm(summaryMsg + '\n\n是否删除成功解压的压缩包?')) {
-                        deleteSuccessfulArchives(successFiles);
-                    }
-                } else {
-                    alert(summaryMsg);
+            // 准备完成数据
+            const completionData = {
+                summaryMsg,
+                successFiles,
+                successList,
+                failList
+            };
+            
+            // 检查页面是否可见
+            if (document.hidden) {
+                // 页面在后台，保存通知并更新标题提醒用户
+                pendingCompletion = completionData;
+                document.title = '✅ 解压完成！ - ' + originalTitle;
+                
+                // 同时尝试使用浏览器通知API
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    new Notification('解压完成', {
+                        body: `成功: ${successList.length}个, 失败: ${failList.length}个`,
+                        icon: '/static/icon.png'
+                    });
                 }
-            }, 1000);
+            } else {
+                // 页面可见，立即显示通知
+                setTimeout(() => {
+                    pendingCompletion = completionData;
+                    showCompletionModal(completionData);
+                }, 500);
+            }
         }
 
         async function deleteSuccessfulArchives(files) {
