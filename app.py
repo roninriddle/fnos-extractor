@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.9
+版本: 1.2.91
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -156,6 +156,13 @@ encryption_cache = {}  # {file_path: (mtime, size, is_encrypted)}
 encryption_cache_lock = threading.Lock()  # 保护 encryption_cache 的线程锁
 detecting_files = set()  # 正在检测中的文件集合，避免重复检测
 control_lock = threading.Lock()
+scan_status = {
+    'scanning': False,
+    'found_count': 0,
+    'current_path': '',
+    'message': ''
+}  # 扫描状态
+scan_status_lock = threading.Lock()  # 保护扫描状态的锁
 
 # ========================================
 # 错误处理 (P2.3)
@@ -468,7 +475,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     ['7z', 'l', '-y', file_path],
                     capture_output=True,
                     text=True,
-                    timeout=10  # 降低超时时间从30秒到10秒
+                    timeout=3  # 加密检测超时设置为3秒
                 )
                 output = (result.stdout + result.stderr).lower()
                 logger.debug(f"7z l 命令返回码: {result.returncode}, 文件: {file_path}")
@@ -487,7 +494,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 logger.debug(f"7z 文件检测为无加密: {file_path}")
                 return True, False
             except subprocess.TimeoutExpired:
-                logger.warning(f"7z l 检测超时 (10秒)，跳过文件: {file_path}")
+                logger.warning(f"7z l 检测超时 (3秒)，跳过文件: {file_path}")
                 # 超时的文件缓存为"无法检测"，避免重复尝试
                 _set_cached_encryption(file_path, False)  # 标记为False避免进入密码破解
                 return True, False  # 返回False表示不加密，实际是跳过
@@ -818,13 +825,30 @@ def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
     # 支持的压缩包格式（包括所有多卷文件格式）
     all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
 
+    # 更新扫描状态
+    with scan_status_lock:
+        scan_status['scanning'] = True
+        scan_status['found_count'] = 0
+        scan_status['current_path'] = root_dir
+        scan_status['message'] = '开始扫描...'
+
     # 高性能扫描（使用 os.scandir 避免 rglob 大开销）
     for file_path in _iter_files(root_dir, recursive=recursive):
         try:
             if _is_archive_file(file_path, all_exts):
                 archives.append(file_path)
+                # 更新扫描状态
+                with scan_status_lock:
+                    scan_status['found_count'] = len(archives)
+                    scan_status['current_path'] = file_path
+                    scan_status['message'] = f'已发现 {len(archives)} 个压缩包'
         except (OSError, PermissionError):
             continue
+
+    # 扫描完成
+    with scan_status_lock:
+        scan_status['scanning'] = False
+        scan_status['message'] = f'扫描完成，共发现 {len(archives)} 个压缩包'
 
     return sorted(archives)
 
@@ -1102,6 +1126,12 @@ def scan_directory():
         'subdirs_with_archives': subdir_stats if include_subdirs else {},
         'subdirs_count': len(subdir_stats) if include_subdirs else 0
     })
+
+@app.route('/api/scan/status', methods=['GET'])
+def get_scan_status():
+    """获取扫描状态"""
+    with scan_status_lock:
+        return jsonify(scan_status)
 
 @app.route('/api/extract', methods=['POST'])
 def extract():
@@ -1413,7 +1443,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.9',
+            'version': '1.2.91',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),

@@ -563,7 +563,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.2.9</div>
+            <div class="version-badge">v1.2.91</div>
             <h1>📦 FNOS 批量解压</h1>
             <p>智能递归扫描 • 密码自动检测 • 多卷支持 • 批量解压</p>
         </div>
@@ -1080,13 +1080,29 @@
             
             // 显示扫描中状态
             document.getElementById('listSection').style.display = 'block';
-            document.getElementById('archiveList').innerHTML = '<div class="empty-state"><p>🔄 正在扫描中...</p></div>';
+            document.getElementById('archiveList').innerHTML = '<div class="empty-state"><p>🔄 正在扫描中...<br/><span id="scanProgress" style="font-size: 13px; color: #999;">准备扫描</span></p></div>';
             document.getElementById('statusGrid').style.display = 'grid';
             document.getElementById('totalCount').textContent = '...';
             document.getElementById('encryptedCount').textContent = '...';
             document.getElementById('selectedCount').textContent = '0';
             document.getElementById('extractSection').style.display = 'block';
             document.getElementById('actionSection').style.display = 'block';
+
+            // 启动扫描进度轮询
+            const progressInterval = setInterval(async () => {
+                try {
+                    const statusResp = await fetch('/api/scan/status');
+                    const status = await statusResp.json();
+                    if (status.scanning) {
+                        const progressEl = document.getElementById('scanProgress');
+                        if (progressEl) {
+                            progressEl.textContent = `${status.message} - ${status.current_path.split('/').pop()}`;
+                        }
+                    }
+                } catch (e) {
+                    // 忽略轮询错误
+                }
+            }, 500);
 
             try {
                 const include_subdirs = document.getElementById('includeSubdirs').checked;
@@ -1095,6 +1111,9 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ path, include_subdirs })
                 });
+
+                // 停止进度轮询
+                clearInterval(progressInterval);
 
                 const data = await response.json();
 
@@ -1116,6 +1135,8 @@
                     document.getElementById('subdirSection').style.display = 'none';
                 }
             } catch (e) {
+                // 停止进度轮询
+                clearInterval(progressInterval);
                 alert('扫描失败: ' + e.message);
             }
         }
