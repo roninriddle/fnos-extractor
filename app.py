@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.94
+版本: 1.2.95
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -47,8 +47,6 @@ MULTIPART_EXTENSIONS = (
 DEFAULT_MOUNT_PATH = '/vol1/1000/Temp'
 LOG_FILE_PATH = Path('/app/fnos.log')
 MAX_CONCURRENT_EXTRACTIONS = 32
-PASSWORD_TIMEOUT = 15  # 每个密码尝试的超时时间（秒）
-EXTRACTION_TIMEOUT = 300  # 单个文件解压的超时时间（秒）
 
 def _has_command(cmd_name: str) -> bool:
     return shutil.which(cmd_name) is not None
@@ -151,6 +149,13 @@ extraction_options = {
 }
 extraction_settings = {
     'concurrent_count': 1  # 并发解压文件数量（默认1个）
+}
+timeout_settings = {
+    'password_timeout': 15,        # 每个密码尝试的超时时间（秒）
+    'extraction_timeout': 300,     # 单个文件解压的超时时间（秒）
+    'detection_7z_timeout': 3,     # 7z加密检测超时（秒）
+    'detection_zip_timeout': 10,   # ZIP加密检测超时（秒）
+    'detection_rar_timeout': 10    # RAR加密检测超时（秒）
 }
 encryption_cache = {}  # {file_path: (mtime, size, is_encrypted)}
 encryption_cache_lock = threading.Lock()  # 保护 encryption_cache 的线程锁
@@ -476,7 +481,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     ['7z', 't', '-p-', file_path],
                     capture_output=True,
                     text=True,
-                    timeout=3  # 加密检测超时设置为3秒
+                    timeout=timeout_settings.get('detection_7z_timeout', 3)
                 )
                 output = (result.stdout + result.stderr).lower()
                 stderr_output = result.stderr.lower()
@@ -518,7 +523,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 ['unzip', '-t', file_path],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=timeout_settings.get('detection_zip_timeout', 10)
             )
             output = (result.stdout + result.stderr).lower()
             
@@ -543,7 +548,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                     ['unrar', 'lt', '-p-', file_path],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=timeout_settings.get('detection_rar_timeout', 10)
                 )
                 output = (result.stdout + result.stderr).lower()
                 if result.returncode != 0:
@@ -562,7 +567,7 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
                 ['7z', 'l', '-y', file_path],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=timeout_settings.get('detection_rar_timeout', 10)
             )
             output = (result.stdout + result.stderr).lower()
             
@@ -602,10 +607,10 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
     """
     解压文件
     返回: (成功, 消息)
-    timeout: 自定义超时时间，如果为None则使用默认的EXTRACTION_TIMEOUT
+    timeout: 自定义超时时间，如果为None则使用默认的extraction_timeout设置
     """
     try:
-        actual_timeout = timeout if timeout is not None else EXTRACTION_TIMEOUT
+        actual_timeout = timeout if timeout is not None else timeout_settings.get('extraction_timeout', 300)
         file_name = Path(file_path).name.lower()
         cmd = []
 
@@ -970,11 +975,12 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
         
         # 处理加密压缩包
         if is_encrypted:
+            password_timeout = timeout_settings.get('password_timeout', 15)
             with extraction_lock:
-                extraction_status[task_id]['message'] = f'需要密码，正在尝试... (每个密码{PASSWORD_TIMEOUT}秒超时)'
+                extraction_status[task_id]['message'] = f'需要密码，正在尝试... (每个密码{password_timeout}秒超时)'
             
             # 每个密码有独立的超时控制
-            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=PASSWORD_TIMEOUT)
+            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=password_timeout)
             if success:
                 with extraction_lock:
                     extraction_status[task_id] = {
@@ -1389,6 +1395,38 @@ def clear_password_cache():
         pass
     return jsonify({'success': True, 'message': '已清空密码缓存'})
 
+@app.route('/api/settings/timeouts', methods=['GET'])
+def get_timeout_settings():
+    """获取超时设置"""
+    return jsonify(timeout_settings)
+
+@app.route('/api/settings/timeouts', methods=['POST'])
+def update_timeout_settings():
+    """更新超时设置"""
+    global timeout_settings
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '无效的请求数据'}), 400
+        
+        # 验证并更新每个设置
+        valid_keys = ['password_timeout', 'extraction_timeout', 'detection_7z_timeout', 
+                     'detection_zip_timeout', 'detection_rar_timeout']
+        
+        for key in valid_keys:
+            if key in data:
+                value = data[key]
+                # 验证是否为正整数
+                if not isinstance(value, (int, float)) or value <= 0:
+                    return jsonify({'error': f'{key} 必须是正数'}), 400
+                timeout_settings[key] = int(value)
+        
+        return jsonify({'success': True, 'message': '超时设置已更新', 'settings': timeout_settings})
+    
+    except Exception as e:
+        logger.error(f"更新超时设置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
     """获取最近的日志信息"""
@@ -1475,7 +1513,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.94',
+            'version': '1.2.95',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),

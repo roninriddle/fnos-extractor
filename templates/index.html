@@ -563,7 +563,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.2.94</div>
+            <div class="version-badge">v1.2.95</div>
             <h1>📦 FNOS 批量解压</h1>
             <p>智能递归扫描 • 密码自动检测 • 多卷支持 • 批量解压</p>
         </div>
@@ -715,6 +715,7 @@
                 <button class="tab-btn active" onclick="switchTab('dir-tab')">📁 目录管理</button>
                 <button class="tab-btn" onclick="switchTab('pwd-tab')">🔐 密码本</button>
                 <button class="tab-btn" onclick="switchTab('concurrent-tab')">⚡ 并发</button>
+                <button class="tab-btn" onclick="switchTab('timeout-tab')">⏱️ 超时</button>
                 <button class="tab-btn" onclick="switchTab('cache-tab')">💾 缓存</button>
             </div>
 
@@ -780,6 +781,103 @@
                 <div class="modal-footer">
                     <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
                     <button class="btn-primary" onclick="saveConcurrentSettings()">💾 保存</button>
+                </div>
+            </div>
+
+            <!-- 超时设置标签 -->
+            <div id="timeout-tab" class="tab-content">
+                <div class="modal-body">
+                    <h3 style="margin-bottom: 20px; color: #333; font-size: 14px;">⏱️ 超时时间设置</h3>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <!-- 密码尝试超时 -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
+                                <label style="font-size: 14px; color: #555; min-width: 180px;">
+                                    🔑 密码尝试超时:
+                                </label>
+                                <input type="number" id="passwordTimeoutInput" min="1" max="300" value="15" 
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 12px; color: #999;">秒</span>
+                            </div>
+                            <p style="font-size: 12px; color: #999; margin-left: 195px;">
+                                每个密码尝试的超时时间。<strong>重要：</strong>如果文件较大或系统较慢，设置过短可能导致正确密码也被判定为失败。建议大文件使用 20-30 秒。
+                            </p>
+                        </div>
+
+                        <!-- 总解压超时 -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
+                                <label style="font-size: 14px; color: #555; min-width: 180px;">
+                                    📦 单文件解压超时:
+                                </label>
+                                <input type="number" id="extractionTimeoutInput" min="10" max="3600" value="300" 
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 12px; color: #999;">秒</span>
+                            </div>
+                            <p style="font-size: 12px; color: #999; margin-left: 195px;">
+                                单个文件完整解压的最大允许时间。超大文件（>10GB）建议设置 600 秒以上。
+                            </p>
+                        </div>
+
+                        <!-- 7z 加密检测超时 -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
+                                <label style="font-size: 14px; color: #555; min-width: 180px;">
+                                    🔍 7z 加密检测超时:
+                                </label>
+                                <input type="number" id="detection7zTimeoutInput" min="1" max="60" value="3" 
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 12px; color: #999;">秒</span>
+                            </div>
+                            <p style="font-size: 12px; color: #999; margin-left: 195px;">
+                                检测 7z 文件是否加密的超时时间。通常 3 秒足够，大文件可适当增加到 5-10 秒。
+                            </p>
+                        </div>
+
+                        <!-- ZIP 加密检测超时 -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
+                                <label style="font-size: 14px; color: #555; min-width: 180px;">
+                                    🔍 ZIP 加密检测超时:
+                                </label>
+                                <input type="number" id="detectionZipTimeoutInput" min="1" max="60" value="10" 
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 12px; color: #999;">秒</span>
+                            </div>
+                            <p style="font-size: 12px; color: #999; margin-left: 195px;">
+                                检测 ZIP 文件是否加密的超时时间。建议 5-10 秒。
+                            </p>
+                        </div>
+
+                        <!-- RAR 加密检测超时 -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
+                                <label style="font-size: 14px; color: #555; min-width: 180px;">
+                                    🔍 RAR 加密检测超时:
+                                </label>
+                                <input type="number" id="detectionRarTimeoutInput" min="1" max="60" value="10" 
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 12px; color: #999;">秒</span>
+                            </div>
+                            <p style="font-size: 12px; color: #999; margin-left: 195px;">
+                                检测 RAR 文件是否加密的超时时间。建议 5-10 秒。
+                            </p>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px; padding: 12px; background: #e3f2fd; border-radius: 6px; border-left: 4px solid #2196f3;">
+                        <strong style="color: #1976d2;">⚠️ 注意事项：</strong>
+                        <ul style="margin: 8px 0 0 20px; font-size: 12px; color: #555;">
+                            <li><strong>密码尝试超时</strong>最重要：如果设置过短，正确的密码也可能因超时被判定为失败</li>
+                            <li>加密检测超时影响扫描速度，设置过长会导致扫描耗时增加</li>
+                            <li>建议先用默认值测试，如遇超时问题再适当增加</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
+                    <button class="btn-primary" onclick="saveTimeoutSettings()">💾 保存</button>
                 </div>
             </div>
 
@@ -868,6 +966,7 @@
             loadPasswordsForEdit();
             loadCacheForDisplay();
             loadConcurrentSettings();
+            loadTimeoutSettings();
         }
 
         function closeSettingsModal() {
@@ -1068,6 +1167,77 @@
                 console.error('加载并发设置失败: ' + e.message);
             }
         }
+
+        // ===== 超时设置 =====
+        async function saveTimeoutSettings() {
+            const passwordTimeout = parseInt(document.getElementById('passwordTimeoutInput').value);
+            const extractionTimeout = parseInt(document.getElementById('extractionTimeoutInput').value);
+            const detection7zTimeout = parseInt(document.getElementById('detection7zTimeoutInput').value);
+            const detectionZipTimeout = parseInt(document.getElementById('detectionZipTimeoutInput').value);
+            const detectionRarTimeout = parseInt(document.getElementById('detectionRarTimeoutInput').value);
+            
+            // 验证输入
+            if (!passwordTimeout || passwordTimeout < 1 || passwordTimeout > 300) {
+                alert('❌ 密码尝试超时必须在 1-300 秒之间');
+                return;
+            }
+            if (!extractionTimeout || extractionTimeout < 10 || extractionTimeout > 3600) {
+                alert('❌ 解压超时必须在 10-3600 秒之间');
+                return;
+            }
+            if (!detection7zTimeout || detection7zTimeout < 1 || detection7zTimeout > 60) {
+                alert('❌ 7z检测超时必须在 1-60 秒之间');
+                return;
+            }
+            if (!detectionZipTimeout || detectionZipTimeout < 1 || detectionZipTimeout > 60) {
+                alert('❌ ZIP检测超时必须在 1-60 秒之间');
+                return;
+            }
+            if (!detectionRarTimeout || detectionRarTimeout < 1 || detectionRarTimeout > 60) {
+                alert('❌ RAR检测超时必须在 1-60 秒之间');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/timeouts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        password_timeout: passwordTimeout,
+                        extraction_timeout: extractionTimeout,
+                        detection_7z_timeout: detection7zTimeout,
+                        detection_zip_timeout: detectionZipTimeout,
+                        detection_rar_timeout: detectionRarTimeout
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ 超时设置已保存');
+                    closeSettingsModal();
+                } else {
+                    alert('❌ 设置失败: ' + data.error);
+                }
+            } catch (e) {
+                alert('设置失败: ' + e.message);
+            }
+        }
+
+        // 初始化超时设置显示
+        async function loadTimeoutSettings() {
+            try {
+                const response = await fetch('/api/settings/timeouts');
+                const data = await response.json();
+                document.getElementById('passwordTimeoutInput').value = data.password_timeout || 15;
+                document.getElementById('extractionTimeoutInput').value = data.extraction_timeout || 300;
+                document.getElementById('detection7zTimeoutInput').value = data.detection_7z_timeout || 3;
+                document.getElementById('detectionZipTimeoutInput').value = data.detection_zip_timeout || 10;
+                document.getElementById('detectionRarTimeoutInput').value = data.detection_rar_timeout || 10;
+            } catch (e) {
+                console.error('加载超时设置失败: ' + e.message);
+            }
+        }
+
         async function scanDirectory() {
             const path = document.getElementById('scanPath').value.trim();
             if (!path) {
