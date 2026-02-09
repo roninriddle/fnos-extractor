@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.92
+版本: 1.2.93
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -703,7 +703,7 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         logger.error(f"解压异常 {file_path}: {e}")
         return False, f"解压异常: {str(e)[:100]}"
 
-def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_per_password: int = 5) -> Tuple[bool, str, Optional[str]]:
+def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_per_password: int = 15) -> Tuple[bool, str, Optional[str]]:
     """
     使用密码词典尝试解压
     每个密码有独立的超时控制
@@ -722,14 +722,23 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
         retry_count += 1
         logger.warning(f"缓存密码失败 {file_path}: {msg}，将尝试词典密码")
     
+    # 记录密码词典大小
+    dict_size = len(PASSWORD_DICT)
+    if dict_size == 0:
+        logger.warning(f"密码词典为空，无法尝试解压")
+        return False, "密码词典为空", None
+    
+    logger.info(f"正在使用密码词典尝试 ({dict_size} 个密码, 每个超时 {timeout_per_password}秒)")
+    
     # 尝试词典中的密码，每个密码有独立的超时
     total_start = time.time()
-    for attempt in range(min(len(PASSWORD_DICT), max_retries)):
+    for attempt in range(min(dict_size, max_retries)):
         password = PASSWORD_DICT[attempt]
         attempt_start = time.time()
         
         try:
             # 每个密码尝试有独立的超时
+            logger.debug(f"尝试密码 {attempt+1}/{min(dict_size, max_retries)}: {password}")
             success, msg = extract_archive(file_path, extract_dir, password, timeout=timeout_per_password)
             attempt_elapsed = time.time() - attempt_start
             
@@ -737,20 +746,23 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
                 # 保存到缓存
                 PASSWORD_SUCCESS_CACHE[file_path] = password
                 save_password_cache()
-                logger.info(f"成功解压 {file_path} (尝试次数: {attempt+1}, 密码耗时: {attempt_elapsed:.1f}s)")
+                logger.info(f"✅ 成功解压 {file_path} (尝试 {attempt+1}, 耗时 {attempt_elapsed:.1f}s)")
                 return True, "解压成功", password
             else:
-                # 密码错误，继续尝试下一个
-                logger.debug(f"密码尝试 {attempt+1} 失败: {password} (耗时: {attempt_elapsed:.1f}s)")
+                # 检查是否是c6 password 错误 vs 超时
+                if "超时" in msg or "timeout" in msg.lower():
+                    logger.warning(f"密码 {attempt+1} 尝试超时 ({attempt_elapsed:.1f}s)，继续尝试下一个")
+                else:
+                    logger.debug(f"密码 {attempt+1} 失败: {msg} ({attempt_elapsed:.1f}s)")
         except Exception as e:
             attempt_elapsed = time.time() - attempt_start
-            logger.warning(f"解压异常 {file_path} (尝试 {attempt+1}): {e} (耗时: {attempt_elapsed:.1f}s)")
+            logger.warning(f"密码 {attempt+1} 异常: {e} ({attempt_elapsed:.1f}s)")
             continue
         
         retry_count += 1
     
     total_elapsed = time.time() - total_start
-    logger.error(f"所有密码都失败了 {file_path} (尝试次数: {retry_count}, 总耗时: {int(total_elapsed)}s)")
+    logger.error(f"❌ 所有密码都失败 {file_path} (尝试 {retry_count} 个，总耗时 {int(total_elapsed)}s)")
     return False, f"所有密码都失败了 (尝试 {retry_count} 个密码，耗时 {int(total_elapsed)}s)", None
 
 def _iter_files(root_dir: str, recursive: bool = True):
@@ -1463,7 +1475,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.92',
+            'version': '1.2.93',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),
