@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.93
+版本: 1.2.94
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -47,7 +47,7 @@ MULTIPART_EXTENSIONS = (
 DEFAULT_MOUNT_PATH = '/vol1/1000/Temp'
 LOG_FILE_PATH = Path('/app/fnos.log')
 MAX_CONCURRENT_EXTRACTIONS = 32
-PASSWORD_TIMEOUT = 5  # 每个密码尝试的超时时间（秒）
+PASSWORD_TIMEOUT = 15  # 每个密码尝试的超时时间（秒）
 EXTRACTION_TIMEOUT = 300  # 单个文件解压的超时时间（秒）
 
 def _has_command(cmd_name: str) -> bool:
@@ -1475,7 +1475,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.93',
+            'version': '1.2.94',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),
