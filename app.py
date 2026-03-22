@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.1-test
+版本: 1.3.11-test
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.1'
+APP_VERSION = '1.3.11'
 APP_RELEASE_TAG = 'test'
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
 
@@ -57,6 +57,10 @@ MAX_CONCURRENT_EXTRACTIONS = 32
 
 def _has_command(cmd_name: str) -> bool:
     return shutil.which(cmd_name) is not None
+
+def _contains_non_ascii(value: Optional[str]) -> bool:
+    """判断字符串是否包含非 ASCII 字符，用于兼容中文密码。"""
+    return bool(value) and any(ord(ch) > 127 for ch in value)
 
 def _get_app_timezone_name() -> str:
     """获取应用日志时区，优先使用环境变量。"""
@@ -268,7 +272,7 @@ def load_password_cache():
     global PASSWORD_SUCCESS_CACHE
     if PASSWORD_CACHE_FILE.exists():
         try:
-            with open(PASSWORD_CACHE_FILE, 'r') as f:
+            with open(PASSWORD_CACHE_FILE, 'r', encoding='utf-8') as f:
                 PASSWORD_SUCCESS_CACHE = json.load(f)
                 logger.info(f"已加载 {len(PASSWORD_SUCCESS_CACHE)} 个缓存密码")
         except Exception as e:
@@ -278,8 +282,8 @@ def save_password_cache():
     """保存密码缓存"""
     try:
         PASSWORD_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PASSWORD_CACHE_FILE, 'w') as f:
-            json.dump(PASSWORD_SUCCESS_CACHE, f)
+        with open(PASSWORD_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(PASSWORD_SUCCESS_CACHE, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"密码缓存保存失败: {e}")
 
@@ -651,6 +655,7 @@ def extract_archive(
         actual_timeout = timeout if timeout is not None else timeout_settings.get('extraction_timeout', 300)
         file_name = Path(file_path).name.lower()
         cmd = []
+        prefer_7z_for_password = _contains_non_ascii(password)
 
         # 7z格式
         if file_name.endswith('.7z'):
@@ -662,7 +667,7 @@ def extract_archive(
 
         # RAR格式
         elif file_name.endswith('.rar'):
-            if _has_command('unrar'):
+            if _has_command('unrar') and not prefer_7z_for_password:
                 if password:
                     cmd = ['unrar', 'x', '-o+', f'-p{password}', file_path, extract_dir]
                 else:
@@ -671,10 +676,14 @@ def extract_archive(
                 cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}']
                 if password:
                     cmd.append(f'-p{password}')
+                else:
+                    cmd.append('-p-')
 
         # ZIP格式
         elif file_name.endswith('.zip'):
-            if password:
+            if password and prefer_7z_for_password:
+                cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}', f'-p{password}']
+            elif password:
                 cmd = ['unzip', '-P', password, '-o', file_path, '-d', extract_dir]
             else:
                 cmd = ['unzip', '-o', file_path, '-d', extract_dir]

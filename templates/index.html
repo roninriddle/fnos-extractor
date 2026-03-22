@@ -25,7 +25,7 @@
             background: white;
             border-radius: 12px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 900px;
+            max-width: 1240px;
             width: 100%;
             overflow: hidden;
         }
@@ -360,6 +360,69 @@
             margin-top: 15px;
         }
 
+        .extension-picker {
+            margin-top: 14px;
+            padding: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+        }
+
+        .extension-picker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .extension-picker-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+        }
+
+        .extension-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .extension-actions button {
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+
+        .extension-chip-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .extension-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: white;
+            border: 1px solid #cbd5e1;
+            font-size: 12px;
+            color: #334155;
+            cursor: pointer;
+        }
+
+        .extension-chip input {
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .extension-chip.empty {
+            cursor: default;
+            color: #94a3b8;
+        }
+
         .modal {
             display: none;
             position: fixed;
@@ -561,6 +624,74 @@
             grid-column: 1 / -1;
         }
 
+        .rename-field {
+            min-width: 0;
+        }
+
+        .rename-field label {
+            display: block;
+            margin-bottom: 6px;
+            color: #555;
+        }
+
+        .rename-help {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #999;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .template-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .template-chip {
+            padding: 7px 12px;
+            border: 1px solid #d6daf5;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #4338ca;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .template-chip:hover {
+            background: #e0e7ff;
+            border-color: #a5b4fc;
+        }
+
+        .workflow-panels {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 24px;
+            align-items: start;
+        }
+
+        .workflow-panel {
+            min-width: 0;
+        }
+
+        .workflow-panel .section {
+            margin-bottom: 0;
+        }
+
+        .panel-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        @media (max-width: 980px) {
+            .workflow-panels {
+                grid-template-columns: 1fr;
+            }
+        }
+
         @media (max-width: 600px) {
             .status-grid {
                 grid-template-columns: 1fr;
@@ -568,6 +699,14 @@
 
             .input-group {
                 flex-direction: column;
+            }
+
+	            .rename-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .panel-stack {
+                gap: 20px;
             }
 
             button {
@@ -584,7 +723,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.3.1-test</div>
+            <div class="version-badge">v1.3.11-test</div>
             <h1>📦 FNOS 批量文件处理</h1>
             <p>智能扫描 • 批量重命名 • 多卷支持 • 批量解压</p>
         </div>
@@ -655,6 +794,16 @@
             <!-- 文件列表 -->
             <div class="section" id="listSection" style="display: none;">
                 <div class="section-title" id="listTitle">压缩包列表</div>
+                <div class="extension-picker" id="extensionPicker" style="display: none;">
+                    <div class="extension-picker-header">
+                        <div class="extension-picker-title">按扩展名选择文件</div>
+                        <div class="extension-actions">
+                            <button class="btn-secondary" type="button" onclick="selectFilesByExtensions()">选择扩展名对应文件</button>
+                            <button class="btn-secondary" type="button" onclick="clearExtensionSelection()">清空扩展名</button>
+                        </div>
+                    </div>
+                    <div class="extension-chip-list" id="extensionList"></div>
+                </div>
                 <div id="archiveList" class="archive-list"></div>
                 <div class="controls">
                     <button class="btn-secondary" onclick="selectAll()">✓ 全选</button>
@@ -663,97 +812,126 @@
                 </div>
             </div>
 
-            <div class="section" id="renameSection" style="display: none;">
-                <div class="section-title">批量重命名</div>
-                <div style="padding: 15px; background: #f9f9f9; border-radius: 6px;">
-                    <div class="rename-grid">
-                        <div>
-                            <label style="display: block; margin-bottom: 6px; color: #555;">重命名方式</label>
-                            <select id="renameMode" onchange="toggleRenameFields()">
-                                <option value="add">批量增加</option>
-                                <option value="replace">批量替换</option>
-                                <option value="set_name_extension">修改文件名和扩展名</option>
-                            </select>
-                        </div>
-                        <div id="renamePositionGroup">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">增加位置</label>
-                            <select id="renamePosition">
-                                <option value="suffix">追加到末尾</option>
-                                <option value="prefix">添加到开头</option>
-                            </select>
-                        </div>
-                        <div id="renameAddTextGroup" class="full-width">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">增加内容</label>
-                            <input type="text" id="renameAddText" placeholder="例如：_已整理">
-                        </div>
-                        <div id="renameFindGroup" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">查找内容</label>
-                            <input type="text" id="renameFindText" placeholder="要替换的内容">
-                        </div>
-                        <div id="renameReplaceGroup" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">替换为</label>
-                            <input type="text" id="renameReplaceText" placeholder="替换后的内容，可留空">
-                        </div>
-                        <div id="renameScopeGroup" class="full-width" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">替换范围</label>
-                            <select id="renameReplaceScope">
-                                <option value="base_name">仅文件名</option>
-                                <option value="full_name">整个文件名</option>
-                                <option value="extension">仅扩展名</option>
-                            </select>
-                        </div>
-                        <div id="renamePatternGroup" class="full-width" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">新文件名模板</label>
-                            <input type="text" id="renamePattern" placeholder="例如：整理后_{n} 或 {name}_bak">
-                            <small style="color: #999;">支持 `{n}` 序号占位符和 `{name}` 原文件名占位符</small>
-                        </div>
-                        <div id="renameStartIndexGroup" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">起始序号</label>
-                            <input type="number" id="renameStartIndex" value="1" min="0">
-                        </div>
-                        <div id="renameExtensionGroup" style="display: none;">
-                            <label style="display: block; margin-bottom: 6px; color: #555;">新扩展名</label>
-                            <input type="text" id="renameExtension" placeholder="例如：txt 或留空去掉扩展名">
+            <div class="workflow-panels" id="workflowPanels">
+                <div class="workflow-panel">
+                    <div class="section" id="renameSection" style="display: none;">
+                        <div class="section-title">批量重命名</div>
+                        <div style="padding: 15px; background: #f9f9f9; border-radius: 6px;">
+                            <div class="rename-grid">
+                                <div class="rename-field">
+                                    <label>重命名方式</label>
+                                    <select id="renameMode" onchange="toggleRenameFields()">
+                                        <option value="add">批量增加</option>
+                                        <option value="replace">批量替换</option>
+                                        <option value="set_name_extension">修改文件名和扩展名</option>
+                                    </select>
+                                </div>
+                                <div id="renamePositionGroup" class="rename-field">
+                                    <label>增加位置</label>
+                                    <select id="renamePosition">
+                                        <option value="suffix">追加到末尾</option>
+                                        <option value="prefix">添加到开头</option>
+                                    </select>
+                                </div>
+                                <div id="renameAddTextGroup" class="full-width rename-field">
+                                    <label>增加内容</label>
+                                    <input type="text" id="renameAddText" placeholder="例如：_已整理">
+                                </div>
+                                <div id="renameFindGroup" class="rename-field" style="display: none;">
+                                    <label>查找内容</label>
+                                    <input type="text" id="renameFindText" placeholder="要替换的内容">
+                                </div>
+                                <div id="renameReplaceGroup" class="rename-field" style="display: none;">
+                                    <label>替换为</label>
+                                    <input type="text" id="renameReplaceText" placeholder="替换后的内容，可留空">
+                                </div>
+                                <div id="renameScopeGroup" class="full-width rename-field" style="display: none;">
+                                    <label>替换范围</label>
+                                    <select id="renameReplaceScope">
+                                        <option value="base_name">仅文件名</option>
+                                        <option value="full_name">整个文件名</option>
+                                        <option value="extension">仅扩展名</option>
+                                    </select>
+                                </div>
+                                <div id="renamePatternGroup" class="full-width rename-field" style="display: none;">
+                                    <label>新文件名模板</label>
+                                    <select id="renameTemplatePreset" onchange="applyRenameTemplatePreset()">
+                                        <option value="">选择常用模板</option>
+                                        <option value="{name}_bak">原名加备份后缀</option>
+                                        <option value="{name}_renamed">原名加重命名后缀</option>
+                                        <option value="整理后_{n}">整理后_序号</option>
+                                        <option value="文件_{n}">文件_序号</option>
+                                        <option value="归档_{n}">归档_序号</option>
+                                        <option value="{n}_{name}">序号在前</option>
+                                        <option value="{name}_{n}">序号在后</option>
+                                        <option value="IMG_{n}">图片编号</option>
+                                        <option value="DOC_{n}">文档编号</option>
+                                    </select>
+                                    <input type="text" id="renamePattern" placeholder="例如：整理后_{n} 或 {name}_bak" style="margin-top: 8px;">
+                                    <div class="rename-help">支持 `{n}` 序号占位符和 `{name}` 原文件名占位符</div>
+                                    <div class="template-row">
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('{name}_bak')">{name}_bak</button>
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('{name}_{n}')">{name}_{n}</button>
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('{n}_{name}')">{n}_{name}</button>
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('整理后_{n}')">整理后_{n}</button>
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('文件_{n}')">文件_{n}</button>
+                                        <button type="button" class="template-chip" onclick="setRenamePattern('归档_{n}')">归档_{n}</button>
+                                    </div>
+                                </div>
+                                <div id="renameStartIndexGroup" class="rename-field" style="display: none;">
+                                    <label>起始序号</label>
+                                    <input type="number" id="renameStartIndex" value="1" min="0">
+                                </div>
+                                <div id="renameExtensionGroup" class="rename-field" style="display: none;">
+                                    <label>新扩展名</label>
+                                    <input type="text" id="renameExtension" placeholder="例如：txt 或留空去掉扩展名">
+                                    <div class="rename-help">输入 `txt`、`jpg` 这类扩展名，或留空表示去掉扩展名</div>
+                                </div>
+                            </div>
+                            <button class="btn-primary" onclick="batchRename()" style="width: 100%; margin-top: 14px;">
+                                ✏️ 对选中文件执行批量重命名
+                            </button>
                         </div>
                     </div>
-                    <button class="btn-primary" onclick="batchRename()" style="width: 100%; margin-top: 14px;">
-                        ✏️ 对选中文件执行批量重命名
-                    </button>
                 </div>
-            </div>
 
-            <!-- 提取路径 -->
-            <div class="section" id="extractSection" style="display: none;">
-                <div class="section-title">解压设置</div>
-                <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
-                    <div style="margin-bottom: 10px;">
-                        <label style="margin-right: 18px; cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到当前文件夹
-                        </label>
-                        <label style="margin-right: 18px; cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到同名文件夹
-                        </label>
-                        <label style="cursor: pointer;">
-                            <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked onchange="toggleExtractPath()">解压到指定目录
-                        </label>
+                <div class="workflow-panel">
+                    <div class="panel-stack">
+                        <!-- 提取路径 -->
+                        <div class="section" id="extractSection" style="display: none;">
+                            <div class="section-title">解压设置</div>
+                            <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 6px;">
+                                <div style="margin-bottom: 10px;">
+                                    <label style="margin-right: 18px; cursor: pointer;">
+                                        <input type="radio" name="extractMode" id="modeCurrent" value="to_current" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到当前文件夹
+                                    </label>
+                                    <label style="margin-right: 18px; cursor: pointer;">
+                                        <input type="radio" name="extractMode" id="modeSameName" value="to_same_name" style="margin-right: 4px;" onchange="toggleExtractPath()">解压到同名文件夹
+                                    </label>
+                                    <label style="cursor: pointer;">
+                                        <input type="radio" name="extractMode" id="modeSpecified" value="to_specified" style="margin-right: 4px;" checked onchange="toggleExtractPath()">解压到指定目录
+                                    </label>
+                                </div>
+                                <div id="extractPathGroup" class="input-group" style="margin-bottom: 0; margin-top: 10px;">
+                                    <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
+                                </div>
+                                <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
+                                <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
+                                    <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
+                                </label>
+                                <small style="color: #999; margin-left: 24px; display: block;">勾选后，成功解压的压缩包将被自动删除（请谨慎使用）</small>
+                            </div>
+                        </div>
+
+                        <!-- 操作按钮 -->
+                        <div class="section" id="actionSection" style="display: none;">
+                            <button class="btn-success" onclick="startExtraction()" style="width: 100%; font-size: 16px; padding: 15px;">
+                                ▶️ 开始批量解压
+                            </button>
+                        </div>
                     </div>
-                    <div id="extractPathGroup" class="input-group" style="margin-bottom: 0; margin-top: 10px;">
-                        <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
-                    </div>
-                    <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
-                    <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
-                        <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
-                        <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
-                    </label>
-                    <small style="color: #999; margin-left: 24px; display: block;">勾选后，成功解压的压缩包将被自动删除（请谨慎使用）</small>
                 </div>
-            </div>
-
-            <!-- 操作按钮 -->
-            <div class="section" id="actionSection" style="display: none;">
-                <button class="btn-success" onclick="startExtraction()" style="width: 100%; font-size: 16px; padding: 15px;">
-                    ▶️ 开始批量解压
-                </button>
             </div>
 
             <!-- 进度部分 -->
@@ -842,7 +1020,7 @@
                     </h3>
                     <textarea id="passwordsTextarea" placeholder="每行一个密码..."></textarea>
                     <p style="margin-top: 10px; font-size: 12px; color: #999;">
-                        💡 提示: 每行一个密码，修改后点击保存
+                        💡 提示: 每行一个密码，支持中文密码，建议使用 UTF-8 编码保存
                     </p>
                 </div>
                 <div class="modal-footer">
@@ -1035,6 +1213,7 @@
                 });
         let archives = [];
         let currentScanMode = 'archives';
+        let scannedExtensions = [];
         let currentTask = null;
         let currentPath = '/vol1/1000/Temp';
         let pendingCompletion = null;  // 待显示的完成通知
@@ -1070,6 +1249,77 @@
             }
         }
 
+        function getFileExtension(fileName) {
+            const lower = (fileName || '').toLowerCase();
+            const multipartMatch = lower.match(/(\.part\d+\.(7z|rar)|\.\d{3}|\.z\d{2}|\.r\d{2}|\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tar\.zst)$/i);
+            if (multipartMatch) {
+                return multipartMatch[1];
+            }
+
+            const suffixIndex = lower.indexOf('.');
+            if (suffixIndex === -1) return '[无扩展名]';
+
+            const parts = lower.split('.').filter(Boolean);
+            if (parts.length >= 2) {
+                const lastTwo = `.${parts.slice(-2).join('.')}`;
+                if (['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'].includes(lastTwo)) {
+                    return lastTwo;
+                }
+            }
+            return lower.slice(lower.lastIndexOf('.')) || '[无扩展名]';
+        }
+
+        function collectExtensions(items) {
+            const stats = new Map();
+            items.forEach(item => {
+                const ext = getFileExtension(item.name);
+                stats.set(ext, (stats.get(ext) || 0) + 1);
+            });
+
+            return Array.from(stats.entries())
+                .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+                .map(([ext, count]) => ({ ext, count }));
+        }
+
+        function renderExtensionPicker() {
+            const picker = document.getElementById('extensionPicker');
+            const list = document.getElementById('extensionList');
+
+            if (!scannedExtensions.length) {
+                picker.style.display = 'none';
+                list.innerHTML = '';
+                return;
+            }
+
+            picker.style.display = 'block';
+            list.innerHTML = scannedExtensions.map(item => `
+                <label class="extension-chip">
+                    <input type="checkbox" class="extension-checkbox" value="${item.ext}">
+                    <span>${item.ext} (${item.count})</span>
+                </label>
+            `).join('');
+        }
+
+        function clearExtensionSelection() {
+            document.querySelectorAll('.extension-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+        }
+
+        function selectFilesByExtensions() {
+            const selectedExts = Array.from(document.querySelectorAll('.extension-checkbox:checked')).map(cb => cb.value);
+            if (selectedExts.length === 0) {
+                alert('请先选择至少一个扩展名');
+                return;
+            }
+
+            document.querySelectorAll('.archive-checkbox').forEach((cb, idx) => {
+                const ext = getFileExtension(archives[idx].name);
+                cb.checked = selectedExts.includes(ext);
+            });
+            updateStats();
+        }
+
         function toggleRenameFields() {
             const mode = document.getElementById('renameMode').value;
             const isAdd = mode === 'add';
@@ -1084,6 +1334,19 @@
             document.getElementById('renamePatternGroup').style.display = isSet ? '' : 'none';
             document.getElementById('renameStartIndexGroup').style.display = isSet ? '' : 'none';
             document.getElementById('renameExtensionGroup').style.display = isSet ? '' : 'none';
+        }
+
+        function setRenamePattern(pattern) {
+            document.getElementById('renamePattern').value = pattern;
+            const preset = document.getElementById('renameTemplatePreset');
+            if (preset) preset.value = pattern;
+        }
+
+        function applyRenameTemplatePreset() {
+            const preset = document.getElementById('renameTemplatePreset').value;
+            if (preset) {
+                document.getElementById('renamePattern').value = preset;
+            }
         }
 
         // ===== 模态框管理 =====
@@ -1448,7 +1711,9 @@
 
                 archives = data.archives;
                 currentScanMode = data.scan_mode || currentScanMode;
+                scannedExtensions = collectExtensions(archives);
                 renderArchiveList();
+                renderExtensionPicker();
                 updateStats();
                 
                 // 显示子目录信息（仅在勾选包含子目录时显示）
@@ -1466,6 +1731,8 @@
             } catch (e) {
                 // 停止进度轮询
                 clearInterval(progressInterval);
+                scannedExtensions = [];
+                renderExtensionPicker();
                 alert('扫描失败: ' + e.message);
             }
         }
@@ -1482,6 +1749,11 @@
         }
 
         function renderArchiveList() {
+            if (!archives.length) {
+                scannedExtensions = [];
+                renderExtensionPicker();
+            }
+
             const listHtml = archives.map((archive, idx) => `
                 <div class="archive-item">
                     <input type="checkbox" class="checkbox archive-checkbox" data-index="${idx}" onchange="updateStats()">

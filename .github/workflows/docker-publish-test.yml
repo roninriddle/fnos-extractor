@@ -1,16 +1,13 @@
-name: Build and publish Docker image
+name: Build and publish test Docker image
 
 on:
   push:
     tags:
-      - 'v*'
-    branches:
-      - main
+      - 'v*-test'
 
 jobs:
   build-and-push:
-    if: github.ref == 'refs/heads/main' || !endsWith(github.ref_name, '-test')
-    name: Build and push release Docker image
+    name: Build and push test Docker image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,14 +28,9 @@ jobs:
       - name: Set image tags
         id: meta
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "channel=release" >> $GITHUB_OUTPUT
-            echo "tags=roninriddle/fnos-extractor:$VERSION,roninriddle/fnos-extractor:latest" >> $GITHUB_OUTPUT
-          else
-            echo "channel=edge" >> $GITHUB_OUTPUT
-            echo "tags=roninriddle/fnos-extractor:edge" >> $GITHUB_OUTPUT
-          fi
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "channel=test" >> $GITHUB_OUTPUT
+          echo "tags=roninriddle/fnos-extractor:$VERSION,roninriddle/fnos-extractor:test" >> $GITHUB_OUTPUT
 
       - name: Show publish plan
         run: |
