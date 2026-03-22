@@ -7,6 +7,8 @@ WORKDIR /app
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PYTHONIOENCODING=utf-8
+ENV TZ=Asia/Shanghai
+ENV APP_TIMEZONE=Asia/Shanghai
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \
@@ -20,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     zstd \
     locales \
+    tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 

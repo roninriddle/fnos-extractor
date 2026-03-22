@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.95
+版本: 1.2.96
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -12,12 +12,15 @@ import os
 import subprocess
 import json
 import threading
+import re
 from queue import Queue
 from typing import Dict, List, Tuple, Optional, Set
 import logging
 import tempfile
 import shutil
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import psutil
 import platform
 
@@ -45,11 +48,46 @@ MULTIPART_EXTENSIONS = (
     '.r00', '.r01', '.r02', '.r03', '.r04', '.r05', '.r06', '.r07', '.r08', '.r09',
 )
 DEFAULT_MOUNT_PATH = '/vol1/1000/Temp'
-LOG_FILE_PATH = Path('/app/fnos.log')
+LOG_FILE_PATH = Path(os.environ.get('FNOS_LOG_FILE', '/app/fnos.log'))
 MAX_CONCURRENT_EXTRACTIONS = 32
 
 def _has_command(cmd_name: str) -> bool:
     return shutil.which(cmd_name) is not None
+
+def _get_app_timezone_name() -> str:
+    """获取应用日志时区，优先使用环境变量。"""
+    return os.environ.get('APP_TIMEZONE') or os.environ.get('TZ') or 'Asia/Shanghai'
+
+def _get_app_timezone() -> ZoneInfo:
+    """解析应用日志时区，失败时回退到上海时区。"""
+    timezone_name = _get_app_timezone_name()
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning(f"无效时区配置 {timezone_name}，回退到 Asia/Shanghai")
+        return ZoneInfo('Asia/Shanghai')
+
+class TimezoneFormatter(logging.Formatter):
+    """使用指定时区输出日志时间。"""
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, _get_app_timezone())
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat(timespec='seconds')
+
+def _configure_logging_timezone() -> None:
+    """统一修正现有日志处理器的时间格式。"""
+    formatter = TimezoneFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setFormatter(formatter)
+
+_configure_logging_timezone()
 
 # ========================================
 # 装饰器和辅助函数
@@ -168,6 +206,15 @@ scan_status = {
     'message': ''
 }  # 扫描状态
 scan_status_lock = threading.Lock()  # 保护扫描状态的锁
+task_counter = 0
+task_counter_lock = threading.Lock()
+
+MULTIPART_PATTERNS = [
+    ('part', re.compile(r'^(?P<base>.+)\.part(?P<index>\d+)\.(?P<ext>7z|rar)$', re.IGNORECASE)),
+    ('001', re.compile(r'^(?P<base>.+)\.(?P<index>\d{3})$', re.IGNORECASE)),
+    ('z', re.compile(r'^(?P<base>.+)\.(?P<index>z\d{2})$', re.IGNORECASE)),
+    ('r', re.compile(r'^(?P<base>.+)\.(?P<index>r\d{2})$', re.IGNORECASE)),
+]
 
 # ========================================
 # 错误处理 (P2.3)
@@ -226,6 +273,7 @@ def load_password_cache():
 def save_password_cache():
     """保存密码缓存"""
     try:
+        PASSWORD_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(PASSWORD_CACHE_FILE, 'w') as f:
             json.dump(PASSWORD_SUCCESS_CACHE, f)
     except Exception as e:
@@ -254,84 +302,137 @@ def is_multipart_archive(file_path: str) -> bool:
     - .RAR, .r00, .r01, ... (RAR经典多卷)
     - .zip.001, .zip.002, ... (zip多卷)
     """
-    name = Path(file_path).name.lower()
-    
-    # .part1.7z / .part1.rar 格式
-    if '.part1.' in name:
-        return True
-    
-    # .001 / .Z01 / .r00 等第一卷格式
-    if name.endswith(('.001', '.Z01', '.z01')):
-        return True
-    
-    # 首个RAR卷 (.RAR 作为第一卷)
-    if name.endswith('.rar') and '.part' not in name:
-        # 这可能是一个RAR卷，需要检查是否有.r00/.001等后续卷
-        parent = Path(file_path).parent
-        base_name = name[:-4]  # 去掉.rar
-        # 检查是否存在其他卷
-        if (parent / f"{base_name}.r00").exists() or \
-           (parent / f"{base_name}.r01").exists() or \
-           (parent / f"{base_name}.Z01").exists() or \
-           (parent / f"{base_name}.001").exists():
-            return True
-    
-    return False
+    return _classify_multipart_file(file_path) is not None
+
+def _multipart_sort_key(file_path: str) -> Tuple[int, str]:
+    classification = _classify_multipart_file(file_path)
+    if classification:
+        return classification['index'], Path(file_path).name.lower()
+    return (10**9, Path(file_path).name.lower())
+
+def _classify_multipart_file(file_path: str) -> Optional[Dict[str, object]]:
+    """识别多卷压缩文件并返回分组信息。"""
+    path = Path(file_path)
+    file_name = path.name
+    lower_name = file_name.lower()
+
+    for pattern_name, pattern in MULTIPART_PATTERNS:
+        match = pattern.match(file_name)
+        if not match:
+            continue
+
+        base_name = match.group('base')
+        raw_index = match.group('index')
+        if pattern_name == 'part':
+            index = int(raw_index)
+            group_key = f"part::{base_name.lower()}::{match.group('ext').lower()}"
+            format_name = 'part1'
+        elif pattern_name == '001':
+            index = int(raw_index)
+            group_key = f"001::{base_name.lower()}"
+            format_name = '001'
+        elif pattern_name == 'z':
+            index = int(raw_index[1:])
+            group_key = f"zip::{base_name.lower()}"
+            format_name = 'Z01'
+        else:
+            index = int(raw_index[1:])
+            group_key = f"rar::{base_name.lower()}"
+            format_name = 'r00'
+
+        return {
+            'group_key': group_key,
+            'name': base_name,
+            'index': index,
+            'format': format_name,
+            'is_first': index in (0, 1)
+        }
+
+    if lower_name.endswith('.rar') and '.part' not in lower_name:
+        base_name = file_name[:-4]
+        parent = path.parent
+        has_volumes = any(
+            candidate.exists()
+            for candidate in (
+                parent / f"{base_name}.r00",
+                parent / f"{base_name}.r01",
+                parent / f"{base_name}.Z01",
+                parent / f"{base_name}.z01",
+                parent / f"{base_name}.001",
+            )
+        )
+        if has_volumes:
+            return {
+                'group_key': f"rar::{base_name.lower()}",
+                'name': base_name,
+                'index': 0,
+                'format': 'rar_first',
+                'is_first': True
+            }
+
+    if lower_name.endswith('.zip'):
+        base_name = file_name[:-4]
+        parent = path.parent
+        has_volumes = any(
+            candidate.exists()
+            for candidate in (
+                parent / f"{base_name}.Z01",
+                parent / f"{base_name}.z01",
+            )
+        )
+        if has_volumes:
+            return {
+                'group_key': f"zip::{base_name.lower()}",
+                'name': base_name,
+                'index': 999999,
+                'format': 'zip_last',
+                'is_first': False
+            }
+
+    return None
 
 def get_multipart_first_volume(file_path: str) -> Optional[str]:
     """
     如果是多卷压缩文件，获取第一卷的路径
     否则返回 None
     """
-    name = Path(file_path).name.lower()
-    parent = Path(file_path).parent
-    
-    # .part1.* 格式 - 已经是第一卷
-    if '.part1.' in name:
+    classification = _classify_multipart_file(file_path)
+    if not classification:
+        return None
+
+    path = Path(file_path)
+    parent = path.parent
+    group_name = classification['name']
+    group_format = classification['format']
+
+    if group_format == 'part1':
+        for ext in ['7z', 'rar']:
+            candidate = parent / f"{group_name}.part1.{ext}"
+            if candidate.exists():
+                return str(candidate)
+    elif group_format == '001':
+        candidate = parent / f"{group_name}.001"
+        if candidate.exists():
+            return str(candidate)
+    elif group_format == 'Z01':
+        for suffix in ['Z01', 'z01']:
+            candidate = parent / f"{group_name}.{suffix}"
+            if candidate.exists():
+                return str(candidate)
+    elif group_format == 'zip_last':
+        for suffix in ['Z01', 'z01']:
+            candidate = parent / f"{group_name}.{suffix}"
+            if candidate.exists():
+                return str(candidate)
+    elif group_format == 'r00':
+        for suffix in ['rar', 'r00']:
+            candidate = parent / f"{group_name}.{suffix}"
+            if candidate.exists():
+                return str(candidate)
+    elif group_format == 'rar_first':
         return file_path
-    
-    # .001 / .Z01 / .z01 格式 - 已经是第一卷
-    if name.endswith(('.001', '.Z01', '.z01')):
-        return file_path
-    
-    # .partN+ 格式 - 需要找 .part1
-    if '.part' in name:
-        base_name = name[:name.find('.part')]
-        # 尝试找 .part1 版本
-        for ext in ['.7z', '.rar']:
-            potential_first = parent / f"{base_name}.part1{ext}"
-            if potential_first.exists():
-                return str(potential_first)
-    
-    # .002, .003 等 - 需要找 .001
-    if name[-3:].isdigit() and name.endswith(tuple(f'.{i:03d}' for i in range(2, 1000))):
-        base_name = name[:-4]  # 去掉 .00X
-        potential_first = parent / f"{base_name}.001"
-        if potential_first.exists():
-            return str(potential_first)
-    
-    # .r01, .r02 等 - 需要找 .rar 或 .r00
-    if name.endswith(tuple(f'.r{i:02d}' for i in range(1, 100))):
-        base_name = name[:-4]  # 去掉 .rXX
-        rar_first = parent / f"{base_name}.rar"
-        r00_first = parent / f"{base_name}.r00"
-        if rar_first.exists():
-            return str(rar_first)
-        elif r00_first.exists():
-            return str(r00_first)
-    
-    # .Z02, .Z03 等 - 需要找 .Z01
-    if name[-3:].upper() in [f'Z{i:02d}' for i in range(2, 100)]:
-        base_name = name[:-4]  # 去掉 .ZXX
-        potential_first = parent / f"{base_name}.Z01"
-        if potential_first.exists():
-            return str(potential_first)
-    
-    # 首个RAR卷 - 已经是 .rar
-    if name.endswith('.rar'):
-        return file_path
-    
-    return None
+
+    return file_path if classification['is_first'] else None
 
 def group_multipart_archives(archives: List[str]) -> Tuple[List[Dict], List[str]]:
     """
@@ -349,120 +450,47 @@ def group_multipart_archives(archives: List[str]) -> Tuple[List[Dict], List[str]
         'format': 'part1'  # 多卷格式类型
     }
     """
-    multipart_groups = {}  # base_name -> group info
+    multipart_groups = {}
     single_files = []
-    
+
     for archive in archives:
-        file_name = Path(archive).name.lower()
-        is_grouped = False
-        
-        # 1. .part1.* 格式 (.part1.7z, .part1.rar)
-        if '.part1.' in file_name:
-            base_name = file_name[:file_name.find('.part1')]
-            if base_name not in multipart_groups:
-                multipart_groups[base_name] = {
-                    'is_multipart': True,
-                    'first_volume': archive,
-                    'volumes': [],
-                    'name': base_name,
-                    'count': 0,
-                    'total_size': 0,
-                    'format': 'part1'
-                }
-            multipart_groups[base_name]['volumes'].append(archive)
-            is_grouped = True
-        
-        # 2. .001 格式 (.001, .002, ...)
-        elif file_name.endswith('.001'):
-            base_name = file_name[:-4]  # 去掉 .001
-            if base_name not in multipart_groups:
-                multipart_groups[base_name] = {
-                    'is_multipart': True,
-                    'first_volume': archive,
-                    'volumes': [],
-                    'name': base_name,
-                    'count': 0,
-                    'total_size': 0,
-                    'format': '001'
-                }
-            multipart_groups[base_name]['volumes'].append(archive)
-            is_grouped = True
-        
-        # 3. .Z01 格式 (.Z01, .Z02, ...) - WinRAR标准
-        elif file_name.endswith(('.Z01', '.z01')):
-            base_name = file_name[:-4]  # 去掉 .Z01
-            if base_name not in multipart_groups:
-                multipart_groups[base_name] = {
-                    'is_multipart': True,
-                    'first_volume': archive,
-                    'volumes': [],
-                    'name': base_name,
-                    'count': 0,
-                    'total_size': 0,
-                    'format': 'Z01'
-                }
-            multipart_groups[base_name]['volumes'].append(archive)
-            is_grouped = True
-        
-        # 4. .r00/.r01 格式 (.r00, .r01, ...) - RAR经典多卷
-        elif file_name.endswith(tuple(f'.r{i:02d}' for i in range(100))):
-            base_name = file_name[:-4]  # 去掉 .rXX
-            if base_name not in multipart_groups:
-                multipart_groups[base_name] = {
-                    'is_multipart': True,
-                    'first_volume': archive,
-                    'volumes': [],
-                    'name': base_name,
-                    'count': 0,
-                    'total_size': 0,
-                    'format': 'r00'
-                }
-            multipart_groups[base_name]['volumes'].append(archive)
-            is_grouped = True
-        
-        # 5. 首个 .rar 文件（如果有后续卷）
-        elif file_name.endswith('.rar') and '.part' not in file_name:
-            parent = Path(archive).parent
-            base_name = file_name[:-4]
-            # 检查是否有后续卷
-            has_volumes = (parent / f"{base_name}.r00").exists() or \
-                         (parent / f"{base_name}.r01").exists() or \
-                         (parent / f"{base_name}.Z01").exists() or \
-                         (parent / f"{base_name}.001").exists()
-            if has_volumes:
-                if base_name not in multipart_groups:
-                    multipart_groups[base_name] = {
-                        'is_multipart': True,
-                        'first_volume': archive,
-                        'volumes': [],
-                        'name': base_name,
-                        'count': 0,
-                        'total_size': 0,
-                        'format': 'rar_first'
-                    }
-                multipart_groups[base_name]['volumes'].append(archive)
-                is_grouped = True
-        
-        if not is_grouped:
-            # 单文件压缩包
+        classification = _classify_multipart_file(archive)
+        if not classification:
             single_files.append(archive)
+            continue
+
+        group_key = classification['group_key']
+        if group_key not in multipart_groups:
+            multipart_groups[group_key] = {
+                'is_multipart': True,
+                'first_volume': archive if classification['is_first'] else None,
+                'volumes': [],
+                'name': classification['name'],
+                'count': 0,
+                'total_size': 0,
+                'format': classification['format']
+            }
+
+        multipart_groups[group_key]['volumes'].append(archive)
+        if classification['is_first']:
+            multipart_groups[group_key]['first_volume'] = archive
     
-    # 统计多卷信息
     multipart_list = []
     for group_name, group_info in multipart_groups.items():
-        group_info['volumes'].sort()  # 按名称排序
+        group_info['volumes'].sort(key=_multipart_sort_key)
         group_info['count'] = len(group_info['volumes'])
-        
-        # 计算总大小
+        if not group_info['first_volume'] and group_info['volumes']:
+            group_info['first_volume'] = group_info['volumes'][0]
+
         try:
             total_size = sum(Path(v).stat().st_size for v in group_info['volumes'])
             group_info['total_size'] = total_size
-        except:
+        except Exception:
             group_info['total_size'] = 0
-        
+
         multipart_list.append(group_info)
         logger.info(f"发现多卷压缩包: {group_name} ({group_info['count']} 卷, {group_info['total_size']} bytes)")
-    
+
     return multipart_list, single_files
 
 def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
@@ -603,7 +631,13 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     
     return False, None
 
-def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = None, timeout: Optional[int] = None) -> Tuple[bool, str]:
+def extract_archive(
+    file_path: str,
+    extract_dir: str,
+    password: Optional[str] = None,
+    timeout: Optional[int] = None,
+    task_id: Optional[str] = None
+) -> Tuple[bool, str]:
     """
     解压文件
     返回: (成功, 消息)
@@ -677,7 +711,38 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         else:
             return False, "不支持的格式"
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=actual_timeout)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        start_time = time.time()
+
+        while True:
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+                break
+
+            if task_id:
+                with control_lock:
+                    should_stop = extraction_control['stop']
+                if should_stop:
+                    process.terminate()
+                    try:
+                        stdout, stderr = process.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        stdout, stderr = process.communicate()
+                    logger.warning(f"解压任务收到停止信号: {file_path}")
+                    return False, "已停止"
+
+            if time.time() - start_time > actual_timeout:
+                process.terminate()
+                try:
+                    process.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+                raise subprocess.TimeoutExpired(cmd, actual_timeout)
+
+            time.sleep(0.2)
 
         if result.returncode == 0:
             logger.info(f"成功解压: {file_path}")
@@ -708,7 +773,13 @@ def extract_archive(file_path: str, extract_dir: str, password: Optional[str] = 
         logger.error(f"解压异常 {file_path}: {e}")
         return False, f"解压异常: {str(e)[:100]}"
 
-def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: int = 5, timeout_per_password: int = 15) -> Tuple[bool, str, Optional[str]]:
+def extract_with_password_dict(
+    file_path: str,
+    extract_dir: str,
+    max_retries: int = 5,
+    timeout_per_password: int = 15,
+    task_id: Optional[str] = None
+) -> Tuple[bool, str, Optional[str]]:
     """
     使用密码词典尝试解压
     每个密码有独立的超时控制
@@ -721,7 +792,7 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
         logger.info(f"尝试缓存密码: {file_path}")
-        success, msg = extract_archive(file_path, extract_dir, cached_pwd, timeout=timeout_per_password)
+        success, msg = extract_archive(file_path, extract_dir, cached_pwd, timeout=timeout_per_password, task_id=task_id)
         if success:
             return True, "解压成功 (缓存密码)", cached_pwd
         retry_count += 1
@@ -738,13 +809,16 @@ def extract_with_password_dict(file_path: str, extract_dir: str, max_retries: in
     # 尝试词典中的密码，每个密码有独立的超时
     total_start = time.time()
     for attempt in range(min(dict_size, max_retries)):
+        if task_id and _wait_if_paused_or_stopped(task_id, file_path, '密码尝试已暂停，等待继续...'):
+            return False, "已停止", None
+
         password = PASSWORD_DICT[attempt]
         attempt_start = time.time()
         
         try:
             # 每个密码尝试有独立的超时
             logger.debug(f"尝试密码 {attempt+1}/{min(dict_size, max_retries)}: {password}")
-            success, msg = extract_archive(file_path, extract_dir, password, timeout=timeout_per_password)
+            success, msg = extract_archive(file_path, extract_dir, password, timeout=timeout_per_password, task_id=task_id)
             attempt_elapsed = time.time() - attempt_start
             
             if success:
@@ -925,99 +999,178 @@ def scan_subdirectories(root_dir: str) -> Dict[str, int]:
 
     return subdir_stats
 
-def process_extraction_task(task_id: str, archive_file: str, extract_dir: str):
+def _next_task_id() -> str:
+    """生成唯一任务 ID，避免多批次覆盖。"""
+    global task_counter
+    with task_counter_lock:
+        task_counter += 1
+        return f"task_{int(time.time() * 1000)}_{task_counter}"
+
+def _wait_if_paused_or_stopped(task_id: str, archive_file: str, message: str) -> bool:
+    """
+    处理暂停/停止控制。
+    返回 True 表示应当停止当前任务。
+    """
+    while True:
+        with control_lock:
+            should_stop = extraction_control['stop']
+            is_paused = extraction_control['pause']
+
+        if should_stop:
+            with extraction_lock:
+                extraction_status[task_id] = {
+                    'status': 'stopped',
+                    'file': archive_file,
+                    'message': '已停止'
+                }
+            return True
+
+        if not is_paused:
+            return False
+
+        with extraction_lock:
+            extraction_status[task_id] = {
+                'status': 'paused',
+                'file': archive_file,
+                'message': message
+            }
+        time.sleep(0.3)
+
+def _delete_archive_files(archive_file: str) -> None:
+    """按配置删除已成功解压的压缩包，支持多卷。"""
+    files_to_delete = [archive_file]
+    first_volume = get_multipart_first_volume(archive_file)
+    if first_volume:
+        parent = Path(first_volume).parent
+        archives_in_dir = [
+            entry.path for entry in os.scandir(parent)
+            if entry.is_file(follow_symlinks=False) and _is_archive_file(entry.path, SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS)
+        ]
+        multipart_groups, _ = group_multipart_archives(archives_in_dir)
+        for group in multipart_groups:
+            if group['first_volume'] == first_volume:
+                files_to_delete = group['volumes']
+                break
+
+    for file_path in files_to_delete:
+        try:
+            os.remove(file_path)
+            logger.info(f"自动删除压缩包: {file_path}")
+        except Exception as e:
+            logger.warning(f"自动删除压缩包失败 {file_path}: {e}")
+
+def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, extraction_semaphore: threading.Semaphore):
     """处理单个解压任务，支持暂停/继续/停止"""
     try:
         with extraction_lock:
             extraction_status[task_id] = {
-                'status': 'processing',
+                'status': 'queued',
                 'file': archive_file,
                 'progress': 0,
-                'message': '检测加密状态...'
+                'message': '等待调度...'
             }
-        
-        # 检查停止标志
-        with control_lock:
-            if extraction_control['stop']:
-                with extraction_lock:
-                    extraction_status[task_id] = {
-                        'status': 'stopped',
-                        'file': archive_file,
-                        'message': '已停止'
-                    }
+
+        with extraction_semaphore:
+            if _wait_if_paused_or_stopped(task_id, archive_file, '任务已暂停，等待继续...'):
                 return
-        
-        # 确定实际的解压目录
-        actual_extract_dir = extract_dir
-        if extraction_options.get('extract_to_same_name', False):
-            # 从文件名获取同名文件夹
-            archive_name = os.path.basename(archive_file)
-            # 移除扩展名获取文件夹名称
-            base_name = archive_name
-            for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
-                if base_name.lower().endswith(ext):
-                    base_name = base_name[:-len(ext)]
-                    break
-            actual_extract_dir = os.path.join(extract_dir, base_name)
-            os.makedirs(actual_extract_dir, exist_ok=True)
-        
-        # 检测是否加密
-        is_archive, is_encrypted = is_archive_encrypted(archive_file)
-        
-        if not is_archive:
+
             with extraction_lock:
                 extraction_status[task_id] = {
-                    'status': 'failed',
+                    'status': 'processing',
                     'file': archive_file,
-                    'message': '不是有效的压缩包'
+                    'progress': 0,
+                    'message': '检测加密状态...'
                 }
-            return
-        
-        # 处理加密压缩包
-        if is_encrypted:
-            password_timeout = timeout_settings.get('password_timeout', 15)
-            with extraction_lock:
-                extraction_status[task_id]['message'] = f'需要密码，正在尝试... (每个密码{password_timeout}秒超时)'
-            
-            # 每个密码有独立的超时控制
-            success, msg, used_pwd = extract_with_password_dict(archive_file, actual_extract_dir, max_retries=5, timeout_per_password=password_timeout)
-            if success:
-                with extraction_lock:
-                    extraction_status[task_id] = {
-                        'status': 'success',
-                        'file': archive_file,
-                        'message': f"成功 (密码: {used_pwd})",
-                        'password': used_pwd
-                    }
-            else:
+
+            actual_extract_dir = extract_dir
+            if extraction_options.get('extract_to_same_name', False) and extraction_options.get('extract_mode') != 'to_same_name':
+                archive_name = os.path.basename(archive_file)
+                base_name = archive_name
+                for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
+                    if base_name.lower().endswith(ext):
+                        base_name = base_name[:-len(ext)]
+                        break
+                actual_extract_dir = os.path.join(extract_dir, base_name)
+                os.makedirs(actual_extract_dir, exist_ok=True)
+
+            is_archive, is_encrypted = is_archive_encrypted(archive_file)
+
+            if not is_archive:
                 with extraction_lock:
                     extraction_status[task_id] = {
                         'status': 'failed',
                         'file': archive_file,
-                        'message': msg
+                        'message': '不是有效的压缩包'
                     }
-                logger.error(f"密码解压失败 {archive_file}: {msg}")
-        else:
-            # 处理非加密压缩包
-            with extraction_lock:
-                extraction_status[task_id]['message'] = '无加密，正在解压...'
-            
-            success, msg = extract_archive(archive_file, actual_extract_dir)
-            if success:
+                return
+
+            if _wait_if_paused_or_stopped(task_id, archive_file, '检测完成，等待继续解压...'):
+                return
+
+            if is_encrypted:
+                password_timeout = timeout_settings.get('password_timeout', 15)
                 with extraction_lock:
                     extraction_status[task_id] = {
-                        'status': 'success',
+                        'status': 'processing',
                         'file': archive_file,
-                        'message': '成功'
+                        'progress': 0,
+                        'message': f'需要密码，正在尝试... (每个密码{password_timeout}秒超时)'
                     }
+
+                success, msg, used_pwd = extract_with_password_dict(
+                    archive_file,
+                    actual_extract_dir,
+                    max_retries=5,
+                    timeout_per_password=password_timeout,
+                    task_id=task_id
+                )
+                if success:
+                    with extraction_lock:
+                        extraction_status[task_id] = {
+                            'status': 'success',
+                            'file': archive_file,
+                            'message': f"成功 (密码: {used_pwd})",
+                            'password': used_pwd
+                        }
+                    if extraction_options.get('auto_delete_success', False):
+                        _delete_archive_files(archive_file)
+                else:
+                    final_status = 'stopped' if '已停止' in msg else 'failed'
+                    with extraction_lock:
+                        extraction_status[task_id] = {
+                            'status': final_status,
+                            'file': archive_file,
+                            'message': msg
+                        }
+                    logger.error(f"密码解压失败 {archive_file}: {msg}")
             else:
                 with extraction_lock:
                     extraction_status[task_id] = {
-                        'status': 'failed',
+                        'status': 'processing',
                         'file': archive_file,
-                        'message': msg
+                        'progress': 0,
+                        'message': '无加密，正在解压...'
                     }
-                logger.error(f"解压失败 {archive_file}: {msg}")
+
+                success, msg = extract_archive(archive_file, actual_extract_dir, task_id=task_id)
+                if success:
+                    with extraction_lock:
+                        extraction_status[task_id] = {
+                            'status': 'success',
+                            'file': archive_file,
+                            'message': '成功'
+                        }
+                    if extraction_options.get('auto_delete_success', False):
+                        _delete_archive_files(archive_file)
+                else:
+                    final_status = 'stopped' if '已停止' in msg else 'failed'
+                    with extraction_lock:
+                        extraction_status[task_id] = {
+                            'status': final_status,
+                            'file': archive_file,
+                            'message': msg
+                        }
+                    logger.error(f"解压失败 {archive_file}: {msg}")
     
     except Exception as e:
         with extraction_lock:
@@ -1201,9 +1354,13 @@ def extract():
             logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
             return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
 
+        with control_lock:
+            extraction_control['stop'] = False
+
         tasks = {}
+        extraction_semaphore = threading.Semaphore(extraction_settings['concurrent_count'])
         for i, archive in enumerate(archives):
-            task_id = f"task_{i}"
+            task_id = _next_task_id()
             tasks[task_id] = archive
 
             # 计算实际解压目录
@@ -1223,7 +1380,7 @@ def extract():
 
             thread = threading.Thread(
                 target=process_extraction_task,
-                args=(task_id, archive, extract_dir)
+                args=(task_id, archive, extract_dir, extraction_semaphore)
             )
             thread.daemon = True
             thread.start()
@@ -1362,7 +1519,8 @@ def update_passwords():
         PASSWORD_DICT = [str(p).strip() for p in new_passwords if str(p).strip()]
         
         # 保存到文件（优先使用当前目录）
-        dict_path = Path('passwords.txt') if Path('.').exists() else Path('/app/passwords.txt')
+        dict_path = PASSWORD_DICT_FILE
+        dict_path.parent.mkdir(parents=True, exist_ok=True)
         with open(dict_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(PASSWORD_DICT))
         
@@ -1513,7 +1671,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.95',
+            'version': '1.2.96',
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),
@@ -1544,8 +1702,8 @@ def metrics():
         metrics_data = {
             'extraction': {
                 'queue_size': extraction_queue.qsize(),
-                'active_tasks': len(extraction_status),
-                'total_completed': sum(1 for s in extraction_status.values() if s.get('status') == 'completed')
+                'active_tasks': sum(1 for s in extraction_status.values() if s.get('status') in {'queued', 'processing', 'paused'}),
+                'total_completed': sum(1 for s in extraction_status.values() if s.get('status') == 'success')
             },
             'cache': {
                 'password_success_count': len(PASSWORD_SUCCESS_CACHE),
@@ -1563,9 +1721,18 @@ def metrics():
 
 if __name__ == '__main__':
     # 配置文件日志处理
-    file_handler = logging.FileHandler('/app/fnos.log')
+    if 'TZ' in os.environ and hasattr(time, 'tzset'):
+        time.tzset()
+
+    log_path = LOG_FILE_PATH
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log_path = Path.cwd() / 'fnos.log'
+
+    file_handler = logging.FileHandler(log_path)
     file_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = TimezoneFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
