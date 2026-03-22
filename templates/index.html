@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FNOS 批量解压工具</title>
+    <title>FNOS 批量文件处理工具</title>
     <style>
         * {
             margin: 0;
@@ -93,16 +93,21 @@
             margin-bottom: 15px;
         }
 
-        input[type="text"] {
+        input[type="text"],
+        input[type="number"],
+        select {
             flex: 1;
             padding: 12px;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
             font-size: 14px;
             transition: border-color 0.3s;
+            background: white;
         }
 
-        input[type="text"]:focus {
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -220,6 +225,11 @@
         .badge-ok {
             background: #d1fae5;
             color: #065f46;
+        }
+
+        .badge-file {
+            background: #e5e7eb;
+            color: #374151;
         }
 
         .status-grid {
@@ -540,6 +550,17 @@
             font-weight: 600;
         }
 
+        .rename-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .rename-grid .full-width {
+            grid-column: 1 / -1;
+        }
+
         @media (max-width: 600px) {
             .status-grid {
                 grid-template-columns: 1fr;
@@ -563,9 +584,9 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.2.96</div>
-            <h1>📦 FNOS 批量解压</h1>
-            <p>智能递归扫描 • 密码自动检测 • 多卷支持 • 批量解压</p>
+            <div class="version-badge">v1.3.0-test</div>
+            <h1>📦 FNOS 批量文件处理</h1>
+            <p>智能扫描 • 批量重命名 • 多卷支持 • 批量解压</p>
         </div>
 
         <div class="content">
@@ -583,13 +604,23 @@
                         <span>包含子目录（勾选时递归扫描所有子目录）</span>
                     </label>
                 </div>
+                <div style="margin-top: 8px; display: flex; gap: 18px; flex-wrap: wrap;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="radio" name="scanMode" value="archives" checked style="margin-right: 8px; cursor: pointer;">
+                        <span>仅扫描压缩包</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="radio" name="scanMode" value="all" style="margin-right: 8px; cursor: pointer;">
+                        <span>扫描所有文件</span>
+                    </label>
+                </div>
                 <div style="margin-top: 8px;">
                     <label style="display: flex; align-items: center; cursor: pointer;">
                         <input type="checkbox" id="debugMode" style="margin-right: 8px; cursor: pointer;" onchange="toggleDebugMode()">
                         <span>🐞 调试模式（开启后右侧显示实时日志）</span>
                     </label>
                 </div>
-                <small style="color: #999;">将扫描该目录下所有 .7z, .rar, .zip 等压缩文件</small>
+                <small id="scanModeHint" style="color: #999;">将扫描该目录下所有 .7z, .rar, .zip 等压缩文件</small>
             </div>
 
             <!-- 统计部分 -->
@@ -616,19 +647,78 @@
             <div class="section" id="subdirSection" style="display: none;">
                 <div class="section-title">子目录检测</div>
                 <p style="margin-bottom: 10px; color: #999; font-size: 12px;">
-                    发现 <strong id="subdirCountText">0</strong> 个含压缩包的子目录
+                    发现 <strong id="subdirCountText">0</strong> 个命中的子目录
                 </p>
                 <div class="subdir-list" id="subdirList"></div>
             </div>
 
             <!-- 文件列表 -->
             <div class="section" id="listSection" style="display: none;">
-                <div class="section-title">压缩包列表</div>
+                <div class="section-title" id="listTitle">压缩包列表</div>
                 <div id="archiveList" class="archive-list"></div>
                 <div class="controls">
                     <button class="btn-secondary" onclick="selectAll()">✓ 全选</button>
                     <button class="btn-secondary" onclick="deselectAll()">✗ 取消选择</button>
-                    <button class="btn-secondary" onclick="selectEncrypted()">🔐 仅选密码</button>
+                    <button class="btn-secondary" id="selectEncryptedBtn" onclick="selectEncrypted()">🔐 仅选密码</button>
+                </div>
+            </div>
+
+            <div class="section" id="renameSection" style="display: none;">
+                <div class="section-title">批量重命名</div>
+                <div style="padding: 15px; background: #f9f9f9; border-radius: 6px;">
+                    <div class="rename-grid">
+                        <div>
+                            <label style="display: block; margin-bottom: 6px; color: #555;">重命名方式</label>
+                            <select id="renameMode" onchange="toggleRenameFields()">
+                                <option value="add">批量增加</option>
+                                <option value="replace">批量替换</option>
+                                <option value="set_name_extension">修改文件名和扩展名</option>
+                            </select>
+                        </div>
+                        <div id="renamePositionGroup">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">增加位置</label>
+                            <select id="renamePosition">
+                                <option value="suffix">追加到末尾</option>
+                                <option value="prefix">添加到开头</option>
+                            </select>
+                        </div>
+                        <div id="renameAddTextGroup" class="full-width">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">增加内容</label>
+                            <input type="text" id="renameAddText" placeholder="例如：_已整理">
+                        </div>
+                        <div id="renameFindGroup" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">查找内容</label>
+                            <input type="text" id="renameFindText" placeholder="要替换的内容">
+                        </div>
+                        <div id="renameReplaceGroup" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">替换为</label>
+                            <input type="text" id="renameReplaceText" placeholder="替换后的内容，可留空">
+                        </div>
+                        <div id="renameScopeGroup" class="full-width" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">替换范围</label>
+                            <select id="renameReplaceScope">
+                                <option value="base_name">仅文件名</option>
+                                <option value="full_name">整个文件名</option>
+                                <option value="extension">仅扩展名</option>
+                            </select>
+                        </div>
+                        <div id="renamePatternGroup" class="full-width" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">新文件名模板</label>
+                            <input type="text" id="renamePattern" placeholder="例如：整理后_{n} 或 {name}_bak">
+                            <small style="color: #999;">支持 `{n}` 序号占位符和 `{name}` 原文件名占位符</small>
+                        </div>
+                        <div id="renameStartIndexGroup" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">起始序号</label>
+                            <input type="number" id="renameStartIndex" value="1" min="0">
+                        </div>
+                        <div id="renameExtensionGroup" style="display: none;">
+                            <label style="display: block; margin-bottom: 6px; color: #555;">新扩展名</label>
+                            <input type="text" id="renameExtension" placeholder="例如：txt 或留空去掉扩展名">
+                        </div>
+                    </div>
+                    <button class="btn-primary" onclick="batchRename()" style="width: 100%; margin-top: 14px;">
+                        ✏️ 对选中文件执行批量重命名
+                    </button>
                 </div>
             </div>
 
@@ -936,9 +1026,15 @@
                 // 页面加载时初始化一次
                 document.addEventListener('DOMContentLoaded', () => {
                     toggleExtractPath();
+                    toggleRenameFields();
+                    updateScanModeHint();
+                    document.querySelectorAll('input[name="scanMode"]').forEach(el => {
+                        el.addEventListener('change', updateScanModeHint);
+                    });
                     document.getElementById('scanPath').focus();
                 });
         let archives = [];
+        let currentScanMode = 'archives';
         let currentTask = null;
         let currentPath = '/vol1/1000/Temp';
         let pendingCompletion = null;  // 待显示的完成通知
@@ -958,6 +1054,37 @@
         let debugLogTimer = null;
         let debugLogBuffer = '';
         let lastLogSnapshot = '';
+
+        function getScanMode() {
+            const checked = document.querySelector('input[name="scanMode"]:checked');
+            return checked ? checked.value : 'archives';
+        }
+
+        function updateScanModeHint() {
+            const scanMode = getScanMode();
+            const hint = document.getElementById('scanModeHint');
+            if (scanMode === 'all') {
+                hint.textContent = '将扫描该目录下所有普通文件，可对选中文件进行批量重命名';
+            } else {
+                hint.textContent = '将扫描该目录下所有 .7z, .rar, .zip 等压缩文件';
+            }
+        }
+
+        function toggleRenameFields() {
+            const mode = document.getElementById('renameMode').value;
+            const isAdd = mode === 'add';
+            const isReplace = mode === 'replace';
+            const isSet = mode === 'set_name_extension';
+
+            document.getElementById('renamePositionGroup').style.display = isAdd ? '' : 'none';
+            document.getElementById('renameAddTextGroup').style.display = isAdd ? '' : 'none';
+            document.getElementById('renameFindGroup').style.display = isReplace ? '' : 'none';
+            document.getElementById('renameReplaceGroup').style.display = isReplace ? '' : 'none';
+            document.getElementById('renameScopeGroup').style.display = isReplace ? '' : 'none';
+            document.getElementById('renamePatternGroup').style.display = isSet ? '' : 'none';
+            document.getElementById('renameStartIndexGroup').style.display = isSet ? '' : 'none';
+            document.getElementById('renameExtensionGroup').style.display = isSet ? '' : 'none';
+        }
 
         // ===== 模态框管理 =====
         function openSettingsModal() {
@@ -1246,17 +1373,21 @@
             }
 
             currentPath = path;
+            currentScanMode = getScanMode();
             document.getElementById('emptyState').style.display = 'none';
             
             // 显示扫描中状态
             document.getElementById('listSection').style.display = 'block';
+            document.getElementById('renameSection').style.display = 'block';
             document.getElementById('archiveList').innerHTML = '<div class="empty-state"><p>🔄 正在扫描中...<br/><span id="scanProgress" style="font-size: 13px; color: #999;">准备扫描</span></p></div>';
             document.getElementById('statusGrid').style.display = 'grid';
             document.getElementById('totalCount').textContent = '...';
             document.getElementById('encryptedCount').textContent = '...';
+            document.getElementById('multipartCount').textContent = '...';
             document.getElementById('selectedCount').textContent = '0';
-            document.getElementById('extractSection').style.display = 'block';
-            document.getElementById('actionSection').style.display = 'block';
+            document.getElementById('extractSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+            document.getElementById('actionSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+            document.getElementById('listTitle').textContent = currentScanMode === 'all' ? '文件列表' : '压缩包列表';
 
             // 启动扫描进度轮询
             const progressInterval = setInterval(async () => {
@@ -1279,7 +1410,7 @@
                 const response = await fetch('/api/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path, include_subdirs })
+                    body: JSON.stringify({ path, include_subdirs, scan_mode: currentScanMode })
                 });
 
                 // 停止进度轮询
@@ -1293,6 +1424,7 @@
                 }
 
                 archives = data.archives;
+                currentScanMode = data.scan_mode || currentScanMode;
                 renderArchiveList();
                 updateStats();
                 
@@ -1304,6 +1436,10 @@
                 } else {
                     document.getElementById('subdirSection').style.display = 'none';
                 }
+
+                document.getElementById('extractSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+                document.getElementById('actionSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+                document.getElementById('selectEncryptedBtn').style.display = currentScanMode === 'archives' ? '' : 'none';
             } catch (e) {
                 // 停止进度轮询
                 clearInterval(progressInterval);
@@ -1331,6 +1467,8 @@
                         <div class="archive-meta">${archive.path}</div>
                         <div class="archive-meta">大小: ${formatSize(archive.size)}</div>
                     </div>
+                    ${archive.item_type === 'file' ? '<span class="badge badge-file">📄 文件</span>' : ''}
+                    ${archive.is_archive && !archive.is_multipart ? '<span class="badge" style="background: #e0f2fe; color: #075985;">🗜️ 压缩包</span>' : ''}
                     ${archive.is_multipart ? `<span class="badge" style="background: #dbeafe; color: #0369a1;">📦 多卷 (${archive.volume_count}卷)</span>` : ''}
                     ${archive.encrypted === true ? '<span class="badge badge-encrypted">🔐 加密</span>' : 
                       archive.encrypted === false ? '<span class="badge badge-ok">✓ 无密</span>' : ''}
@@ -1338,18 +1476,20 @@
                 </div>
             `).join('');
 
-            document.getElementById('archiveList').innerHTML = listHtml || '<div class="empty-state"><p>未找到压缩包</p></div>';
+            document.getElementById('archiveList').innerHTML = listHtml || `<div class="empty-state"><p>${currentScanMode === 'all' ? '未找到文件' : '未找到压缩包'}</p></div>`;
         }
 
         function updateStats() {
             const encrypted = archives.filter(a => a.encrypted === true).length;
             const multipart = archives.filter(a => a.is_multipart === true).length;
             const selected = document.querySelectorAll('.archive-checkbox:checked').length;
+            const archiveCount = archives.filter(a => a.is_archive).length;
 
             document.getElementById('totalCount').textContent = archives.length;
-            document.getElementById('encryptedCount').textContent = encrypted;
+            document.getElementById('encryptedCount').textContent = currentScanMode === 'all' ? archiveCount : encrypted;
             document.getElementById('multipartCount').textContent = multipart;
             document.getElementById('selectedCount').textContent = selected;
+            document.querySelector('#statusGrid .status-card:nth-child(2) p').textContent = currentScanMode === 'all' ? '压缩包文件' : '加密文件';
         }
 
         function selectAll() {
@@ -1367,6 +1507,61 @@
                 cb.checked = archives[idx].encrypted === true;
             });
             updateStats();
+        }
+
+        function getSelectedItems() {
+            return Array.from(document.querySelectorAll('.archive-checkbox:checked'))
+                .map(cb => archives[parseInt(cb.dataset.index, 10)]);
+        }
+
+        async function batchRename() {
+            const selectedItems = getSelectedItems();
+            if (selectedItems.length === 0) {
+                alert('请选择至少一个文件');
+                return;
+            }
+
+            const mode = document.getElementById('renameMode').value;
+            const options = {};
+
+            if (mode === 'add') {
+                options.add_text = document.getElementById('renameAddText').value;
+                options.position = document.getElementById('renamePosition').value;
+            } else if (mode === 'replace') {
+                options.find_text = document.getElementById('renameFindText').value;
+                options.replace_text = document.getElementById('renameReplaceText').value;
+                options.replace_scope = document.getElementById('renameReplaceScope').value;
+            } else {
+                options.name_pattern = document.getElementById('renamePattern').value;
+                options.new_extension = document.getElementById('renameExtension').value;
+                options.start_index = parseInt(document.getElementById('renameStartIndex').value || '1', 10);
+            }
+
+            if (!confirm(`确定要重命名选中的 ${selectedItems.length} 个文件吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        files: selectedItems.map(item => item.path),
+                        mode,
+                        options
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || '批量重命名失败');
+                }
+
+                alert(`✅ ${data.message}`);
+                await scanDirectory();
+            } catch (e) {
+                alert('批量重命名失败: ' + e.message);
+            }
         }
 
         // ===== 解压控制 =====

@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.2.96
+版本: 1.3.0-test
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -26,6 +26,10 @@ import platform
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
+
+APP_VERSION = '1.3.0'
+APP_RELEASE_TAG = 'test'
+APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -883,6 +887,15 @@ def _is_archive_file(file_name: str, all_exts: Tuple[str, ...]) -> bool:
     name = file_name.lower()
     return name.endswith(all_exts)
 
+def _split_filename_parts(file_path: str) -> Tuple[str, str]:
+    """按多后缀拆分文件名和扩展名。"""
+    name = Path(file_path).name
+    suffixes = Path(file_path).suffixes
+    extension = ''.join(suffixes)
+    if extension:
+        return name[:-len(extension)], extension
+    return name, ''
+
 def _get_cached_encryption(file_path: str) -> Optional[bool]:
     """获取缓存的加密状态（线程安全）"""
     with encryption_cache_lock:
@@ -963,7 +976,39 @@ def find_all_archives(root_dir: str, recursive: bool = True) -> List[str]:
 
     return sorted(archives)
 
-def scan_subdirectories(root_dir: str) -> Dict[str, int]:
+def find_all_files(root_dir: str, recursive: bool = True) -> List[str]:
+    """扫描目录下所有普通文件。"""
+    files = []
+    root_path = Path(root_dir)
+
+    if not root_path.exists():
+        logger.error(f"目录不存在: {root_dir}")
+        return files
+
+    if not root_path.is_dir():
+        logger.error(f"路径不是目录: {root_dir}")
+        return files
+
+    with scan_status_lock:
+        scan_status['scanning'] = True
+        scan_status['found_count'] = 0
+        scan_status['current_path'] = root_dir
+        scan_status['message'] = '开始扫描所有文件...'
+
+    for file_path in _iter_files(root_dir, recursive=recursive):
+        files.append(file_path)
+        with scan_status_lock:
+            scan_status['found_count'] = len(files)
+            scan_status['current_path'] = file_path
+            scan_status['message'] = f'已发现 {len(files)} 个文件'
+
+    with scan_status_lock:
+        scan_status['scanning'] = False
+        scan_status['message'] = f'扫描完成，共发现 {len(files)} 个文件'
+
+    return sorted(files)
+
+def scan_subdirectories(root_dir: str, scan_mode: str = 'archives') -> Dict[str, int]:
     """扫描子目录中是否存在压缩包"""
     root_path = Path(root_dir)
     subdir_stats = {}
@@ -976,21 +1021,21 @@ def scan_subdirectories(root_dir: str) -> Dict[str, int]:
         logger.warning(f"路径不是目录: {root_dir}")
         return subdir_stats
 
-    # 支持的压缩包格式（包含多卷格式）
-    all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
-
     try:
         for item in root_path.iterdir():
             try:
                 if item.is_dir():
-                    # 使用高性能遍历计算压缩包数量
-                    archive_count = 0
+                    item_count = 0
                     for file_path in _iter_files(str(item), recursive=True):
-                        if _is_archive_file(file_path, all_exts):
-                            archive_count += 1
+                        if scan_mode == 'all':
+                            item_count += 1
+                        else:
+                            all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
+                            if _is_archive_file(file_path, all_exts):
+                                item_count += 1
 
-                    if archive_count > 0:
-                        subdir_stats[item.name] = archive_count
+                    if item_count > 0:
+                        subdir_stats[item.name] = item_count
             except (OSError, PermissionError) as e:
                 logger.debug(f"无法访问子目录 {item}: {e}")
                 continue
@@ -1189,11 +1234,15 @@ def index():
 @app.route('/api/scan', methods=['POST'])
 def scan_directory():
     """扫描目录"""
-    data = request.get_json()
+    data = request.get_json() or {}
     root_dir = data.get('path', DEFAULT_MOUNT_PATH)
-    include_subdirs = data.get('include_subdirs', True)  # 新增参数，默认包含子目录
+    include_subdirs = data.get('include_subdirs', True)
+    scan_mode = data.get('scan_mode', 'archives')
+
+    if scan_mode not in {'archives', 'all'}:
+        return jsonify({'error': 'scan_mode 仅支持 archives 或 all'}), 400
     
-    logger.info(f"开始扫描目录: {root_dir} (包含子目录: {include_subdirs})")
+    logger.info(f"开始扫描目录: {root_dir} (包含子目录: {include_subdirs}, 模式: {scan_mode})")
     
     # 验证目录存在
     root_path = Path(root_dir)
@@ -1211,44 +1260,79 @@ def scan_directory():
         return jsonify({'error': f'没有目录读取权限: {root_dir}'}), 403
     
     try:
-        archives = find_all_archives(root_dir, recursive=include_subdirs)
-        logger.info(f"扫描完成，发现 {len(archives)} 个压缩包 (子目录: {include_subdirs})")
+        if scan_mode == 'all':
+            scanned_files = find_all_files(root_dir, recursive=include_subdirs)
+            logger.info(f"扫描完成，发现 {len(scanned_files)} 个文件 (子目录: {include_subdirs})")
+        else:
+            scanned_files = find_all_archives(root_dir, recursive=include_subdirs)
+            logger.info(f"扫描完成，发现 {len(scanned_files)} 个压缩包 (子目录: {include_subdirs})")
     except Exception as e:
         logger.error(f"扫描压缩包时出错: {e}")
         return jsonify({'error': f'扫描文件时出错: {str(e)}'}), 500
     
     try:
         if include_subdirs:
-            subdir_stats = scan_subdirectories(root_dir)
+            subdir_stats = scan_subdirectories(root_dir, scan_mode=scan_mode)
         else:
             subdir_stats = {}
     except Exception as e:
         logger.error(f"扫描子目录时出错: {e}")
         subdir_stats = {}
-    
-    # 将多卷文件分组
-    multipart_groups, single_archives = group_multipart_archives(archives)
+
+    if scan_mode == 'all':
+        all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
+        result = []
+        archive_count = 0
+        for file_path in scanned_files:
+            try:
+                is_archive = _is_archive_file(file_path, all_exts)
+                if is_archive:
+                    archive_count += 1
+
+                result.append({
+                    'path': file_path,
+                    'name': Path(file_path).name,
+                    'size': Path(file_path).stat().st_size,
+                    'encrypted': None,
+                    'status': 'ready',
+                    'cached': file_path in PASSWORD_SUCCESS_CACHE,
+                    'is_multipart': False,
+                    'is_archive': is_archive,
+                    'item_type': 'archive' if is_archive else 'file'
+                })
+            except (OSError, PermissionError) as e:
+                logger.warning(f"无法访问文件 {file_path}: {e}")
+                continue
+
+        return jsonify({
+            'total': len(result),
+            'archives': result,
+            'multipart_count': 0,
+            'single_count': len(result),
+            'archive_count': archive_count,
+            'scan_mode': scan_mode,
+            'subdirs_with_archives': subdir_stats if include_subdirs else {},
+            'subdirs_count': len(subdir_stats) if include_subdirs else 0
+        })
+
+    multipart_groups, single_archives = group_multipart_archives(scanned_files)
     logger.info(f"发现 {len(multipart_groups)} 个多卷文件组，{len(single_archives)} 个单文件")
-    
-    # 分析单文件压缩包
+
     single_result = []
     for archive in single_archives:
         try:
-            # 检查是否正在检测中，避免重复检测
             if _is_detecting(archive):
                 logger.debug(f"文件正在检测中，跳过: {archive}")
                 continue
-                
+
             cached_enc = _get_cached_encryption(archive)
             if cached_enc is None:
-                # 标记为检测中
                 _mark_detecting(archive, True)
                 try:
                     is_arch, is_enc = is_archive_encrypted(archive)
                     if is_arch:
                         _set_cached_encryption(archive, is_enc)
                 finally:
-                    # 检测完成，移除标记
                     _mark_detecting(archive, False)
             else:
                 is_arch, is_enc = True, cached_enc
@@ -1260,7 +1344,9 @@ def scan_directory():
                 'encrypted': is_enc if is_arch else None,
                 'status': 'ready',
                 'cached': archive in PASSWORD_SUCCESS_CACHE,
-                'is_multipart': False
+                'is_multipart': False,
+                'is_archive': True,
+                'item_type': 'archive'
             })
         except (OSError, PermissionError) as e:
             logger.warning(f"无法访问压缩包 {archive}: {e}")
@@ -1268,17 +1354,14 @@ def scan_directory():
         except Exception as e:
             logger.warning(f"处理压缩包 {archive} 时出错: {e}")
             continue
-    
-    # 分析多卷压缩包
+
     multipart_result = []
     for group in multipart_groups:
         try:
-            # 检查是否正在检测中
             if _is_detecting(group['first_volume']):
                 logger.debug(f"文件正在检测中，跳过: {group['first_volume']}")
                 continue
-                
-            # 检测第一卷是否加密（带缓存）
+
             cached_enc = _get_cached_encryption(group['first_volume'])
             if cached_enc is None:
                 _mark_detecting(group['first_volume'], True)
@@ -1292,7 +1375,7 @@ def scan_directory():
                 is_arch, is_enc = True, cached_enc
 
             multipart_result.append({
-                'path': group['first_volume'],  # 返回第一卷路径用于解压
+                'path': group['first_volume'],
                 'name': group['name'],
                 'size': group['total_size'],
                 'encrypted': is_enc if is_arch else None,
@@ -1300,20 +1383,23 @@ def scan_directory():
                 'cached': group['first_volume'] in PASSWORD_SUCCESS_CACHE,
                 'is_multipart': True,
                 'volume_count': group['count'],
-                'volumes': group['volumes']
+                'volumes': group['volumes'],
+                'is_archive': True,
+                'item_type': 'archive'
             })
         except Exception as e:
             logger.warning(f"处理多卷压缩包 {group['name']} 时出错: {e}")
             continue
-    
-    # 合并结果
+
     result = single_result + multipart_result
-    
+
     return jsonify({
         'total': len(result),
         'archives': result,
         'multipart_count': len(multipart_result),
         'single_count': len(single_result),
+        'archive_count': len(result),
+        'scan_mode': scan_mode,
         'subdirs_with_archives': subdir_stats if include_subdirs else {},
         'subdirs_count': len(subdir_stats) if include_subdirs else 0
     })
@@ -1449,6 +1535,7 @@ def get_config():
         'password_dict_size': len(PASSWORD_DICT),
         'password_cache_size': len(PASSWORD_SUCCESS_CACHE),
         'default_mount': DEFAULT_MOUNT_PATH,
+        'version': APP_DISPLAY_VERSION,
         'concurrent_count': extraction_settings['concurrent_count'],
         'supported_formats': list(SUPPORTED_ARCHIVE_EXTENSIONS),
         'multipart_formats': ['.part1.7z', '.part1.rar', '.001', '.002']
@@ -1480,13 +1567,14 @@ def update_settings():
 @app.route('/api/subdirs', methods=['POST'])
 def scan_subdirs():
     """扫描子目录中的压缩包"""
-    data = request.get_json()
+    data = request.get_json() or {}
     root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    scan_mode = data.get('scan_mode', 'archives')
     
     if not Path(root_dir).exists():
         return jsonify({'error': f'目录不存在: {root_dir}'}), 400
     
-    subdir_stats = scan_subdirectories(root_dir)
+    subdir_stats = scan_subdirectories(root_dir, scan_mode=scan_mode)
     
     return jsonify({
         'path': root_dir,
@@ -1552,6 +1640,131 @@ def clear_password_cache():
     except:
         pass
     return jsonify({'success': True, 'message': '已清空密码缓存'})
+
+def _normalize_extension(extension: str) -> str:
+    extension = (extension or '').strip()
+    if not extension:
+        return ''
+    if not extension.startswith('.'):
+        extension = f'.{extension}'
+    return extension
+
+def _build_renamed_filename(path: str, mode: str, options: Dict, index: int, total: int) -> str:
+    base_name, extension = _split_filename_parts(path)
+
+    if mode == 'add':
+        add_text = str(options.get('add_text', ''))
+        if not add_text:
+            raise APIError('追加内容不能为空')
+        position = options.get('position', 'suffix')
+        new_base_name = f"{add_text}{base_name}" if position == 'prefix' else f"{base_name}{add_text}"
+        return f"{new_base_name}{extension}"
+
+    if mode == 'replace':
+        find_text = str(options.get('find_text', ''))
+        replace_text = str(options.get('replace_text', ''))
+        replace_scope = options.get('replace_scope', 'base_name')
+        if not find_text:
+            raise APIError('替换目标不能为空')
+
+        if replace_scope == 'extension':
+            target = extension
+            replaced = target.replace(find_text, replace_text)
+            return f"{base_name}{replaced}"
+
+        if replace_scope == 'full_name':
+            return Path(path).name.replace(find_text, replace_text)
+
+        new_base_name = base_name.replace(find_text, replace_text)
+        return f"{new_base_name}{extension}"
+
+    if mode == 'set_name_extension':
+        pattern = str(options.get('name_pattern', '')).strip()
+        new_extension = options.get('new_extension')
+        if pattern:
+            sequence_index = index + int(options.get('start_index', 1))
+            if '{n}' in pattern or '{name}' in pattern:
+                new_base_name = pattern.replace('{name}', base_name).replace('{n}', str(sequence_index))
+            elif total > 1:
+                new_base_name = f"{pattern}_{sequence_index}"
+            else:
+                new_base_name = pattern
+        else:
+            new_base_name = base_name
+
+        if new_extension is None:
+            normalized_extension = extension
+        else:
+            normalized_extension = _normalize_extension(str(new_extension))
+
+        if not new_base_name and not normalized_extension:
+            raise APIError('新文件名和扩展名不能同时为空')
+        return f"{new_base_name}{normalized_extension}"
+
+    raise APIError('不支持的重命名模式')
+
+@app.route('/api/rename', methods=['POST'])
+def rename_files():
+    """批量重命名文件"""
+    try:
+        data = request.get_json() or {}
+        files = data.get('files', [])
+        mode = data.get('mode', '')
+        options = data.get('options', {})
+
+        if not isinstance(files, list) or not files:
+            return jsonify({'error': '请至少选择一个文件'}), 400
+
+        if mode not in {'add', 'replace', 'set_name_extension'}:
+            return jsonify({'error': '不支持的重命名模式'}), 400
+
+        rename_plan = []
+        seen_targets = set()
+
+        for index, file_path in enumerate(files):
+            path = Path(file_path)
+            if not path.exists() or not path.is_file():
+                return jsonify({'error': f'文件不存在或不可用: {file_path}'}), 400
+
+            new_name = _build_renamed_filename(file_path, mode, options, index, len(files))
+            if new_name == path.name:
+                continue
+
+            target_path = str(path.with_name(new_name))
+            if target_path in seen_targets:
+                return jsonify({'error': f'批量重命名结果冲突: {new_name}'}), 400
+
+            if Path(target_path).exists() and Path(target_path) != path:
+                return jsonify({'error': f'目标文件已存在: {target_path}'}), 400
+
+            seen_targets.add(target_path)
+            rename_plan.append((file_path, target_path))
+
+        if not rename_plan:
+            return jsonify({'success': True, 'message': '没有需要重命名的文件', 'renamed': [], 'count': 0})
+
+        renamed = []
+        for source, target in rename_plan:
+            os.rename(source, target)
+            renamed.append({
+                'old_path': source,
+                'new_path': target,
+                'old_name': Path(source).name,
+                'new_name': Path(target).name
+            })
+            logger.info(f"批量重命名: {source} -> {target}")
+
+        return jsonify({
+            'success': True,
+            'message': f'已重命名 {len(renamed)} 个文件',
+            'renamed': renamed,
+            'count': len(renamed)
+        })
+    except APIError as e:
+        return jsonify({'error': e.message}), e.status_code
+    except Exception as e:
+        logger.exception(f"批量重命名失败: {e}")
+        return jsonify({'error': f'批量重命名失败: {str(e)}'}), 500
 
 @app.route('/api/settings/timeouts', methods=['GET'])
 def get_timeout_settings():
@@ -1671,7 +1884,7 @@ def health_check():
 
         health_status = {
             'status': 'healthy',
-            'version': '1.2.96',
+            'version': APP_DISPLAY_VERSION,
             'uptime': time.time() - proc.create_time(),
             'system': {
                 'platform': platform.system(),
