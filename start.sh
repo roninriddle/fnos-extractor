@@ -25,6 +25,11 @@ fi
 
 echo "✓ 准备启动容器"
 
+# 拉取最新镜像
+echo ""
+echo "拉取镜像中..."
+$COMPOSE_CMD pull || true
+
 # 启动容器
 echo ""
 echo "启动中..."
