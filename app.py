@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.0-test
+版本: 1.3.1-test
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
 APP_RELEASE_TAG = 'test'
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
 
@@ -1112,7 +1112,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                 'status': 'queued',
                 'file': archive_file,
                 'progress': 0,
-                'message': '等待调度...'
+                'message': '排队中，等待并发空位...'
             }
 
         with extraction_semaphore:
@@ -1433,12 +1433,13 @@ def extract():
         extraction_options['auto_delete_success'] = auto_delete_success
         extraction_options['extract_mode'] = extract_mode
 
-        # 确保解压基目录存在
-        try:
-            os.makedirs(extract_base, exist_ok=True)
-        except Exception as e:
-            logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
-            return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
+        # 仅在确实需要指定目录时创建基目录，避免“当前文件夹”模式误创建 extracted
+        if extract_mode in {'to_specified', 'to_same_name'}:
+            try:
+                os.makedirs(extract_base, exist_ok=True)
+            except Exception as e:
+                logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
+                return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
 
         with control_lock:
             extraction_control['stop'] = False

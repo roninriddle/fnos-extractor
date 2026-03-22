@@ -584,7 +584,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.3.0-test</div>
+            <div class="version-badge">v1.3.1-test</div>
             <h1>📦 FNOS 批量文件处理</h1>
             <p>智能扫描 • 批量重命名 • 多卷支持 • 批量解压</p>
         </div>
@@ -1101,9 +1101,35 @@
         }
         
         function closeCompletionModal() {
-            document.getElementById('completionModal').classList.remove('active');
+            restorePageAfterCompletion(false);
+        }
+
+        function resetCompletionState() {
             pendingCompletion = null;
             document.title = originalTitle;
+            document.getElementById('completionModal').classList.remove('active');
+            document.getElementById('completionSummary').innerHTML = '';
+            document.getElementById('deleteQuestion').style.display = 'none';
+            document.querySelector('#completionModal .modal-footer').innerHTML =
+                '<button class="btn-primary" onclick="confirmDeleteArchives()">🗑️ 删除压缩包</button>' +
+                '<button class="btn-secondary" onclick="skipDelete()">保留文件</button>';
+        }
+
+        async function restorePageAfterCompletion(refreshList = true) {
+            resetCompletionState();
+            document.getElementById('progressSection').style.display = 'none';
+            document.getElementById('listSection').style.display = 'block';
+            document.getElementById('renameSection').style.display = 'block';
+            document.getElementById('extractSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+            document.getElementById('actionSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
+
+            if (refreshList) {
+                try {
+                    await scanDirectory();
+                } catch (e) {
+                    console.error('刷新列表失败:', e);
+                }
+            }
         }
         
         function showCompletionModal(completionData) {
@@ -1146,13 +1172,10 @@
             if (pendingCompletion && pendingCompletion.successFiles) {
                 deleteSuccessfulArchives(pendingCompletion.successFiles);
             }
-            closeCompletionModal();
         }
         
         function skipDelete() {
-            closeCompletionModal();
-            // 刷新页面以显示最新状态
-            setTimeout(() => location.reload(), 300);
+            restorePageAfterCompletion(true);
         }
 
         function switchTab(tabName) {
@@ -1701,14 +1724,22 @@
             if (document.getElementById('modeCurrent').checked) extractMode = 'to_current';
             else if (document.getElementById('modeSameName').checked) extractMode = 'to_same_name';
 
-            document.getElementById('listSection').style.display = 'none';
-            document.getElementById('actionSection').style.display = 'none';
-            document.getElementById('progressSection').style.display = 'block';
-            document.getElementById('pauseBtn').style.display = 'block';
-            document.getElementById('resumeBtn').style.display = 'none';
-            isPaused = false;
+            resetCompletionState();
+            document.getElementById('taskLog').innerHTML = '';
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('progressPercent').textContent = '0%';
+            document.getElementById('progressText').textContent = `0/${selected.length}`;
 
             try {
+                await fetch('/api/extraction/reset', { method: 'POST' });
+
+                document.getElementById('listSection').style.display = 'none';
+                document.getElementById('actionSection').style.display = 'none';
+                document.getElementById('progressSection').style.display = 'block';
+                document.getElementById('pauseBtn').style.display = 'block';
+                document.getElementById('resumeBtn').style.display = 'none';
+                isPaused = false;
+
                 const response = await fetch('/api/extract', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1732,6 +1763,9 @@
                 currentTask = data;
                 monitorProgress();
             } catch (e) {
+                document.getElementById('progressSection').style.display = 'none';
+                document.getElementById('listSection').style.display = 'block';
+                document.getElementById('actionSection').style.display = currentScanMode === 'archives' ? 'block' : 'none';
                 alert('启动解压失败: ' + e.message);
             }
         }
@@ -1740,26 +1774,30 @@
             let completed = 0;
             const total = currentTask.task_count;
             let finalStatus = {};
+            const currentTaskIds = Object.keys(currentTask.tasks || {});
 
             while (completed < total) {
                 const response = await fetch('/api/status');
                 const status = await response.json();
-                finalStatus = status;
+                finalStatus = Object.fromEntries(
+                    Object.entries(status).filter(([taskId]) => currentTaskIds.includes(taskId))
+                );
 
                 let successCount = 0;
                 const logs = [];
 
-                for (const [taskId, taskStatus] of Object.entries(status)) {
+                for (const [taskId, taskStatus] of Object.entries(finalStatus)) {
                     if (taskStatus.status === 'success') successCount++;
                     
                     const icon = taskStatus.status === 'success' ? '✓' :
                                  taskStatus.status === 'error' ? '✗' :
-                                 taskStatus.status === 'failed' ? '✗' : '⏳';
+                                 taskStatus.status === 'failed' ? '✗' :
+                                 taskStatus.status === 'stopped' ? '■' : '⏳';
                     
                     logs.push(`${icon} ${taskStatus.file.split('/').pop()}: ${taskStatus.message}`);
                 }
 
-                completed = successCount + Object.values(status).filter(s => s.status === 'failed' || s.status === 'error').length;
+                completed = Object.values(finalStatus).filter(s => ['success', 'failed', 'error', 'stopped'].includes(s.status)).length;
 
                 document.getElementById('progressFill').style.width = (completed / total * 100) + '%';
                 document.getElementById('progressPercent').textContent = Math.round(completed / total * 100) + '%';
@@ -1780,7 +1818,7 @@
                 if (taskStatus.status === 'success') {
                     successList.push(fileName);
                     successFiles.push(taskStatus.file);
-                } else {
+                } else if (taskStatus.status === 'failed' || taskStatus.status === 'error' || taskStatus.status === 'stopped') {
                     failList.push(`${fileName} (${taskStatus.message})`);
                 }
             }
@@ -1835,7 +1873,7 @@
             } catch (e) {
                 alert('❌ 删除失败: ' + e.message);
             } finally {
-                location.reload();
+                await restorePageAfterCompletion(true);
             }
         }
 
