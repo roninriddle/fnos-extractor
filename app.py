@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.11-test
+版本: 1.3.12-test
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.11'
+APP_VERSION = '1.3.12'
 APP_RELEASE_TAG = 'test'
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
 
@@ -1651,14 +1651,6 @@ def clear_password_cache():
         pass
     return jsonify({'success': True, 'message': '已清空密码缓存'})
 
-def _normalize_extension(extension: str) -> str:
-    extension = (extension or '').strip()
-    if not extension:
-        return ''
-    if not extension.startswith('.'):
-        extension = f'.{extension}'
-    return extension
-
 def _build_renamed_filename(path: str, mode: str, options: Dict, index: int, total: int) -> str:
     base_name, extension = _split_filename_parts(path)
 
@@ -1667,7 +1659,19 @@ def _build_renamed_filename(path: str, mode: str, options: Dict, index: int, tot
         if not add_text:
             raise APIError('追加内容不能为空')
         position = options.get('position', 'suffix')
-        new_base_name = f"{add_text}{base_name}" if position == 'prefix' else f"{base_name}{add_text}"
+        if position == 'prefix':
+            new_base_name = f"{add_text}{base_name}"
+        elif position == 'index':
+            raw_index = options.get('insert_index', 1)
+            try:
+                insert_index = int(raw_index)
+            except (TypeError, ValueError):
+                raise APIError('插入位置必须是整数')
+            insert_index = max(1, min(insert_index, len(base_name) + 1))
+            insert_at = insert_index - 1
+            new_base_name = f"{base_name[:insert_at]}{add_text}{base_name[insert_at:]}"
+        else:
+            new_base_name = f"{base_name}{add_text}"
         return f"{new_base_name}{extension}"
 
     if mode == 'replace':
@@ -1688,29 +1692,6 @@ def _build_renamed_filename(path: str, mode: str, options: Dict, index: int, tot
         new_base_name = base_name.replace(find_text, replace_text)
         return f"{new_base_name}{extension}"
 
-    if mode == 'set_name_extension':
-        pattern = str(options.get('name_pattern', '')).strip()
-        new_extension = options.get('new_extension')
-        if pattern:
-            sequence_index = index + int(options.get('start_index', 1))
-            if '{n}' in pattern or '{name}' in pattern:
-                new_base_name = pattern.replace('{name}', base_name).replace('{n}', str(sequence_index))
-            elif total > 1:
-                new_base_name = f"{pattern}_{sequence_index}"
-            else:
-                new_base_name = pattern
-        else:
-            new_base_name = base_name
-
-        if new_extension is None:
-            normalized_extension = extension
-        else:
-            normalized_extension = _normalize_extension(str(new_extension))
-
-        if not new_base_name and not normalized_extension:
-            raise APIError('新文件名和扩展名不能同时为空')
-        return f"{new_base_name}{normalized_extension}"
-
     raise APIError('不支持的重命名模式')
 
 @app.route('/api/rename', methods=['POST'])
@@ -1725,7 +1706,7 @@ def rename_files():
         if not isinstance(files, list) or not files:
             return jsonify({'error': '请至少选择一个文件'}), 400
 
-        if mode not in {'add', 'replace', 'set_name_extension'}:
+        if mode not in {'add', 'replace'}:
             return jsonify({'error': '不支持的重命名模式'}), 400
 
         rename_plan = []
