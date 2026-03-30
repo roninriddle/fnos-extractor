@@ -4,12 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
 
 jobs:
   build-and-push:
-    if: github.ref == 'refs/heads/main' || !endsWith(github.ref_name, '-test')
+    if: !endsWith(github.ref_name, '-test')
     name: Build and push release Docker image
     runs-on: ubuntu-latest
     steps:
@@ -31,14 +29,10 @@ jobs:
       - name: Set image tags
         id: meta
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "channel=release" >> $GITHUB_OUTPUT
-            echo "tags=roninriddle/fnos-extractor:$VERSION,roninriddle/fnos-extractor:latest" >> $GITHUB_OUTPUT
-          else
-            echo "channel=edge" >> $GITHUB_OUTPUT
-            echo "tags=roninriddle/fnos-extractor:edge" >> $GITHUB_OUTPUT
-          fi
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "channel=release" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tags=roninriddle/fnos-extractor:$VERSION,roninriddle/fnos-extractor:latest" >> $GITHUB_OUTPUT
 
       - name: Show publish plan
         run: |
@@ -53,3 +47,38 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Cleanup old DockerHub tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          KEEP_TAGS: "1.2.96,${{ steps.meta.outputs.version }},latest"
+        run: |
+          set -euo pipefail
+
+          AUTH_RESPONSE=$(curl -fsSL -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_TOKEN\"}" \
+            https://hub.docker.com/v2/users/login/)
+          JWT_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token')
+
+          if [[ -z "$JWT_TOKEN" || "$JWT_TOKEN" == "null" ]]; then
+            echo "Failed to acquire DockerHub token"
+            exit 1
+          fi
+
+          KEEP_REGEX="^($(echo "$KEEP_TAGS" | tr ',' '|'))$"
+          NEXT_URL="https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags?page_size=100"
+
+          while [[ -n "$NEXT_URL" && "$NEXT_URL" != "null" ]]; do
+            PAGE=$(curl -fsSL -H "Authorization: JWT $JWT_TOKEN" "$NEXT_URL")
+            echo "$PAGE" | jq -r '.results[].name' | while read -r TAG_NAME; do
+              if [[ ! "$TAG_NAME" =~ $KEEP_REGEX ]]; then
+                echo "Deleting DockerHub tag: $TAG_NAME"
+                curl -fsSL -X DELETE \
+                  -H "Authorization: JWT $JWT_TOKEN" \
+                  "https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags/$TAG_NAME/"
+              fi
+            done
+            NEXT_URL=$(echo "$PAGE" | jq -r '.next')
+          done

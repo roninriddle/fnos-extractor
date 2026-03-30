@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.13-test
+版本: 1.3.2
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,9 +27,9 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.13'
-APP_RELEASE_TAG = 'test'
-APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
+APP_VERSION = '1.3.2'
+APP_RELEASE_TAG = ''
+APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
