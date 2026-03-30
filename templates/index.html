@@ -19,6 +19,11 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
+            transition: padding-right 0.25s ease;
+        }
+
+        body.debug-panel-open {
+            padding-right: 400px;
         }
 
         .container {
@@ -28,6 +33,7 @@
             max-width: 1240px;
             width: 100%;
             overflow: hidden;
+            transition: transform 0.25s ease;
         }
 
         .header {
@@ -320,6 +326,22 @@
             font-size: 12px;
             white-space: pre-wrap;
             word-break: break-word;
+        }
+
+        .debug-panel-close {
+            margin-left: auto;
+            padding: 0;
+            background: transparent;
+            color: #94a3b8;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .debug-panel-close:hover {
+            background: transparent;
+            color: #e2e8f0;
+            transform: none;
+            box-shadow: none;
         }
 
         .log-item {
@@ -759,12 +781,18 @@
                 padding: 20px;
             }
         }
+
+        @media (max-width: 1280px) {
+            body.debug-panel-open {
+                padding-right: 20px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.3.12-test</div>
+            <div class="version-badge">v1.3.13-test</div>
             <h1>📦 FNOS 批量文件处理</h1>
             <p>智能扫描 • 批量重命名 • 多卷支持 • 批量解压</p>
         </div>
@@ -855,11 +883,11 @@
                 <div class="section-title">批量处理</div>
                 <div class="workflow-card">
                     <div class="workflow-tabs">
-                        <button class="workflow-tab-btn active" id="renameTabBtn" type="button" onclick="switchWorkflowPanel('rename')">✏️ 批量重命名</button>
-                        <button class="workflow-tab-btn" id="extractTabBtn" type="button" onclick="switchWorkflowPanel('extract')">📦 解压设置</button>
+                        <button class="workflow-tab-btn active" id="extractTabBtn" type="button" onclick="switchWorkflowPanel('extract')">📦 批量解压</button>
+                        <button class="workflow-tab-btn" id="renameTabBtn" type="button" onclick="switchWorkflowPanel('rename')">✏️ 批量重命名</button>
                     </div>
 
-                    <div class="workflow-pane active" id="renamePane">
+                    <div class="workflow-pane" id="renamePane">
                         <div class="section" id="renameSection" style="display: none;">
                             <div class="rename-grid">
                                 <div class="rename-field">
@@ -915,7 +943,7 @@
                         </div>
                     </div>
 
-                    <div class="workflow-pane" id="extractPane">
+                    <div class="workflow-pane active" id="extractPane">
                         <div class="section" id="extractSection" style="display: none;">
                             <div style="margin-top: 4px;">
                                 <div style="margin-bottom: 10px;">
@@ -983,7 +1011,10 @@
 
     <!-- 调试日志面板 -->
     <div id="debugLogPanel" class="debug-panel" style="display: none;">
-        <div class="debug-panel-header">🐞 调试日志（实时）</div>
+        <div class="debug-panel-header" style="display: flex; align-items: center; gap: 8px;">
+            <span>🐞 调试日志（实时）</span>
+            <button type="button" class="debug-panel-close" onclick="closeDebugPanel()">✕</button>
+        </div>
         <div class="debug-panel-body" id="debugLogContent">调试模式已开启，日志加载中...</div>
     </div>
 
@@ -2014,6 +2045,7 @@
         function toggleDebugMode() {
             debugMode = document.getElementById('debugMode').checked;
             const panel = document.getElementById('debugLogPanel');
+            document.body.classList.toggle('debug-panel-open', debugMode);
 
             if (debugMode) {
                 panel.style.display = 'flex';
@@ -2030,6 +2062,11 @@
                     debugLogTimer = null;
                 }
             }
+        }
+
+        function closeDebugPanel() {
+            document.getElementById('debugMode').checked = false;
+            toggleDebugMode();
         }
 
         async function fetchDebugLogs() {

@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.12-test
+版本: 1.3.13-test
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.12'
+APP_VERSION = '1.3.13'
 APP_RELEASE_TAG = 'test'
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}"
 
@@ -724,38 +724,46 @@ def extract_archive(
         else:
             return False, "不支持的格式"
 
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        start_time = time.time()
+        # 直接把子进程输出写入临时文件，避免大体积输出填满 PIPE 后卡死，
+        # 导致明明已经解压成功却被误判成“超时/密码失败”。
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode='w+t', encoding='utf-8', errors='ignore') as stdout_buffer, \
+             tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode='w+t', encoding='utf-8', errors='ignore') as stderr_buffer:
+            process = subprocess.Popen(cmd, stdout=stdout_buffer, stderr=stderr_buffer, text=True)
+            start_time = time.time()
 
-        while True:
-            if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
-                break
+            while True:
+                if process.poll() is not None:
+                    break
 
-            if task_id:
-                with control_lock:
-                    should_stop = extraction_control['stop']
-                if should_stop:
+                if task_id:
+                    with control_lock:
+                        should_stop = extraction_control['stop']
+                    if should_stop:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        logger.warning(f"解压任务收到停止信号: {file_path}")
+                        return False, "已停止"
+
+                if time.time() - start_time > actual_timeout:
                     process.terminate()
                     try:
-                        stdout, stderr = process.communicate(timeout=2)
+                        process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                        stdout, stderr = process.communicate()
-                    logger.warning(f"解压任务收到停止信号: {file_path}")
-                    return False, "已停止"
+                        process.wait()
+                    raise subprocess.TimeoutExpired(cmd, actual_timeout)
 
-            if time.time() - start_time > actual_timeout:
-                process.terminate()
-                try:
-                    process.communicate(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.communicate()
-                raise subprocess.TimeoutExpired(cmd, actual_timeout)
+                time.sleep(0.2)
 
-            time.sleep(0.2)
+            stdout_buffer.seek(0)
+            stderr_buffer.seek(0)
+            stdout = stdout_buffer.read()
+            stderr = stderr_buffer.read()
+            result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
         if result.returncode == 0:
             logger.info(f"成功解压: {file_path}")
