@@ -1,6 +1,8 @@
-# FNOS 批量文件处理工具 v1.3.2
+# FNOS 批量文件处理工具 v1.3.21
 
 🚀 生产级批量文件处理工具 - 支持 Web UI、密码破解、多卷文件、智能解压与批量重命名
+
+**正式镜像**: `docker pull roninriddle/fnos-extractor:latest`
 
 **测试镜像**: `docker pull roninriddle/fnos-extractor:test`
 
@@ -31,7 +33,7 @@
 **其他格式**: `.cab` (Windows Cabinet), `.iso` (光盘镜像)
 
 ### 🔐 密码管理
-- **密码词典** - 支持自定义密码词典，每个密码5秒超时
+- **密码词典** - 支持自定义密码词典，每个密码15秒超时
 - **智能缓存** - 自动记忆成功密码，后续快速解压
 - **在线编辑** - Web UI 实时编辑密码词典
 
@@ -57,12 +59,12 @@
 ### Docker 运行（推荐）
 
 ```bash
-docker pull roninriddle/fnos-extractor:test
+docker pull roninriddle/fnos-extractor:latest
 docker run -d \
   --name fnos-extractor \
   -p 5000:5000 \
   -v /path/to/archives:/vol1/1000/Temp \
-  roninriddle/fnos-extractor:test
+  roninriddle/fnos-extractor:latest
 
 # 访问 http://localhost:5000
 ```
@@ -72,8 +74,10 @@ docker run -d \
 ```bash
 git clone https://github.com/roninriddle/fnos-extractor.git
 cd fnos-extractor
-docker-compose up -d
+docker compose up -d
 ```
+
+仓库自带的 [docker-compose.yml](/Users/ronin/Downloads/fnos-extractor/docker-compose.yml) 默认使用正式版 `latest` 镜像；如需体验测试版，可将镜像改为 `roninriddle/fnos-extractor:test`。
 
 ### 本地开发
 
@@ -135,24 +139,24 @@ python app.py
 
 ## 📦 版本信息
 
-**当前版本**: v1.3.2
+**当前版本**: v1.3.21
 
 **本次更新**:
-- 🛠️ 修复大体积解压输出导致的误判超时、误判密码失败问题
-- 🐞 优化调试日志侧栏布局，开启后不再遮挡页面右侧内容
-- 📦 调整批量处理页签顺序，默认优先显示批量解压
-- ✅ 本版已整理为正式版 1.3.2
+- 🧩 扩展名勾选后自动选中对应文件，并实时显示已选文件数量
+- 📦 扫描所有文件时保留批量解压页签，但默认切到批量重命名
+- 🔗 首页底部新增 GitHub 更新入口，便于用户检查新版本
+- ✅ 本版已整理为正式版 1.3.21
 
 ---
 
 ## 🤝 贡献
 
-**GitHub**: https://github.com/roninriddle/fnos-extractor
-**Docker Hub**: https://hub.docker.com/r/roninriddle/fnos-extractor
-**许可**: MIT License
+- **GitHub**: https://github.com/roninriddle/fnos-extractor
+- **Docker Hub**: https://hub.docker.com/r/roninriddle/fnos-extractor
+- **许可**: MIT License
 
 欢迎提交 Issue 和 Pull Request！
 
 ---
 
-**Last Updated**: 2026-03-30 | Version: 1.3.2
+**Last Updated**: 2026-04-03 | Version: 1.3.21

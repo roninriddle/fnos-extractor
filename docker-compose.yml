@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   fnos-extractor:
-    image: roninriddle/fnos-extractor:test
+    image: roninriddle/fnos-extractor:latest
     # 如需固定架构可取消注释并设置：linux/arm64 或 linux/amd64
     # platform: linux/arm64
     # 如需本地构建请启用下面一行

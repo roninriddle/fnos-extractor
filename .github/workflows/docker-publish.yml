@@ -69,16 +69,44 @@ jobs:
 
           KEEP_REGEX="^($(echo "$KEEP_TAGS" | tr ',' '|'))$"
           NEXT_URL="https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags?page_size=100"
+          TAGS_TO_DELETE_FILE=$(mktemp)
+          trap 'rm -f "$TAGS_TO_DELETE_FILE"' EXIT
 
           while [[ -n "$NEXT_URL" && "$NEXT_URL" != "null" ]]; do
             PAGE=$(curl -fsSL -H "Authorization: JWT $JWT_TOKEN" "$NEXT_URL")
-            echo "$PAGE" | jq -r '.results[].name' | while read -r TAG_NAME; do
+            while IFS= read -r TAG_NAME; do
+              [[ -z "$TAG_NAME" ]] && continue
               if [[ ! "$TAG_NAME" =~ $KEEP_REGEX ]]; then
-                echo "Deleting DockerHub tag: $TAG_NAME"
-                curl -fsSL -X DELETE \
-                  -H "Authorization: JWT $JWT_TOKEN" \
-                  "https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags/$TAG_NAME/"
+                echo "$TAG_NAME" >> "$TAGS_TO_DELETE_FILE"
               fi
-            done
-            NEXT_URL=$(echo "$PAGE" | jq -r '.next')
+            done < <(echo "$PAGE" | jq -r '.results[]?.name')
+            NEXT_URL=$(echo "$PAGE" | jq -r '.next // empty')
           done
+
+          sort -u "$TAGS_TO_DELETE_FILE" -o "$TAGS_TO_DELETE_FILE"
+
+          if [[ ! -s "$TAGS_TO_DELETE_FILE" ]]; then
+            echo "No old DockerHub tags to delete"
+            exit 0
+          fi
+
+          while IFS= read -r TAG_NAME; do
+            [[ -z "$TAG_NAME" ]] && continue
+            echo "Deleting DockerHub tag: $TAG_NAME"
+            DELETE_RESPONSE_FILE=$(mktemp)
+            DELETE_STATUS=$(curl -sSL -o "$DELETE_RESPONSE_FILE" -w "%{http_code}" \
+              -X DELETE \
+              -H "Authorization: JWT $JWT_TOKEN" \
+              "https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags/$TAG_NAME/")
+
+            if [[ "$DELETE_STATUS" == "202" || "$DELETE_STATUS" == "204" || "$DELETE_STATUS" == "404" ]]; then
+              echo "Delete status for $TAG_NAME: $DELETE_STATUS"
+            else
+              echo "Failed to delete DockerHub tag: $TAG_NAME (HTTP $DELETE_STATUS)"
+              cat "$DELETE_RESPONSE_FILE"
+              rm -f "$DELETE_RESPONSE_FILE"
+              exit 1
+            fi
+
+            rm -f "$DELETE_RESPONSE_FILE"
+          done < "$TAGS_TO_DELETE_FILE"
