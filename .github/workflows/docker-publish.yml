@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+    tags-ignore:
+      - 'v*-test'
 
 jobs:
   build-and-push:
-    if: ${{ !endsWith(github.ref_name, '-test') }}
     name: Build and push release Docker image
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +53,6 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          KEEP_TAGS: "1.2.96,${{ steps.meta.outputs.version }},latest"
         run: |
           set -euo pipefail
 
@@ -67,7 +67,6 @@ jobs:
             exit 1
           fi
 
-          KEEP_REGEX="^($(echo "$KEEP_TAGS" | tr ',' '|'))$"
           NEXT_URL="https://hub.docker.com/v2/repositories/roninriddle/fnos-extractor/tags?page_size=100"
           TAGS_TO_DELETE_FILE=$(mktemp)
           trap 'rm -f "$TAGS_TO_DELETE_FILE"' EXIT
@@ -76,7 +75,7 @@ jobs:
             PAGE=$(curl -fsSL -H "Authorization: JWT $JWT_TOKEN" "$NEXT_URL")
             while IFS= read -r TAG_NAME; do
               [[ -z "$TAG_NAME" ]] && continue
-              if [[ ! "$TAG_NAME" =~ $KEEP_REGEX ]]; then
+              if [[ "$TAG_NAME" == "test" || "$TAG_NAME" == *"-test" ]]; then
                 echo "$TAG_NAME" >> "$TAGS_TO_DELETE_FILE"
               fi
             done < <(echo "$PAGE" | jq -r '.results[]?.name')

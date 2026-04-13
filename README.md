@@ -1,10 +1,8 @@
-# FNOS 批量文件处理工具 v1.3.21
+# FNOS 批量文件处理工具 v1.3.22
 
 🚀 生产级批量文件处理工具 - 支持 Web UI、密码破解、多卷文件、智能解压与批量重命名
 
 **正式镜像**: `docker pull roninriddle/fnos-extractor:latest`
-
-**测试镜像**: `docker pull roninriddle/fnos-extractor:test`
 
 ---
 
@@ -77,7 +75,7 @@ cd fnos-extractor
 docker compose up -d
 ```
 
-仓库自带的 [docker-compose.yml](/Users/ronin/Downloads/fnos-extractor/docker-compose.yml) 默认使用正式版 `latest` 镜像；如需体验测试版，可将镜像改为 `roninriddle/fnos-extractor:test`。
+仓库自带的 [docker-compose.yml](/Users/ronin/Downloads/fnos-extractor/docker-compose.yml) 默认使用正式版 `latest` 镜像。
 
 ### 本地开发
 
@@ -139,13 +137,13 @@ python app.py
 
 ## 📦 版本信息
 
-**当前版本**: v1.3.21
+**当前版本**: v1.3.22
 
 **本次更新**:
-- 🧩 扩展名勾选后自动选中对应文件，并实时显示已选文件数量
-- 📦 扫描所有文件时保留批量解压页签，但默认切到批量重命名
-- 🔗 首页底部新增 GitHub 更新入口，便于用户检查新版本
-- ✅ 本版已整理为正式版 1.3.21
+- 🔧 修复加密压缩包在密码尝试阶段被 15 秒短超时误判失败的问题
+- ⏱️ 单密码和缓存密码场景直接使用完整解压超时，避免大文件被误记成密码错误
+- 🧹 移除测试版发布链路与测试版说明，统一为正式版发布
+- ✅ 本版已整理为正式版 1.3.22
 
 ---
 
@@ -159,4 +157,4 @@ python app.py
 
 ---
 
-**Last Updated**: 2026-04-03 | Version: 1.3.21
+**Last Updated**: 2026-04-13 | Version: 1.3.22

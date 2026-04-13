@@ -27,7 +27,7 @@ jobs:
       - name: Validate Python syntax
         run: python -m py_compile app.py
 
-      - name: Smoke test health endpoint import path
+      - name: Smoke check health endpoint import path
         run: python -c "import app; print(app.APP_DISPLAY_VERSION)"
 
   docker-build:

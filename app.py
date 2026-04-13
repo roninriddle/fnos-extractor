@@ -2,7 +2,7 @@
 """
 FNOS 批量解压工具
 支持递归扫描、密码检测和Web界面
-版本: 1.3.21
+版本: 1.3.22
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.21'
+APP_VERSION = '1.3.22'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -749,6 +749,15 @@ def extract_archive(
                         return False, "已停止"
 
                 if time.time() - start_time > actual_timeout:
+                    # 给刚好到达超时边界的进程一次最终完成机会，
+                    # 避免已经完成的解压被误判成超时。
+                    if process.poll() is not None:
+                        break
+                    try:
+                        process.wait(timeout=0.3)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
                     process.terminate()
                     try:
                         process.wait(timeout=2)
@@ -794,6 +803,18 @@ def extract_archive(
         logger.error(f"解压异常 {file_path}: {e}")
         return False, f"解压异常: {str(e)[:100]}"
 
+def _is_password_failure_message(message: Optional[str]) -> bool:
+    if not message:
+        return False
+    lowered = str(message).lower()
+    return '密码错误' in message or '需要密码' in message or 'wrong password' in lowered
+
+def _is_timeout_message(message: Optional[str]) -> bool:
+    if not message:
+        return False
+    lowered = str(message).lower()
+    return '超时' in message or 'timeout' in lowered
+
 def extract_with_password_dict(
     file_path: str,
     extract_dir: str,
@@ -808,16 +829,27 @@ def extract_with_password_dict(
     """
     import time
     retry_count = 0
+    full_extraction_timeout = timeout_settings.get('extraction_timeout', 300)
     
     # 检查缓存
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
         logger.info(f"尝试缓存密码: {file_path}")
-        success, msg = extract_archive(file_path, extract_dir, cached_pwd, timeout=timeout_per_password, task_id=task_id)
+        success, msg = extract_archive(
+            file_path,
+            extract_dir,
+            cached_pwd,
+            timeout=full_extraction_timeout,
+            task_id=task_id
+        )
         if success:
             return True, "解压成功 (缓存密码)", cached_pwd
+
         retry_count += 1
-        logger.warning(f"缓存密码失败 {file_path}: {msg}，将尝试词典密码")
+        if _is_password_failure_message(msg):
+            logger.warning(f"缓存密码失效 {file_path}: {msg}，将尝试词典密码")
+        else:
+            return False, msg, cached_pwd
     
     # 记录密码词典大小
     dict_size = len(PASSWORD_DICT)
@@ -826,6 +858,12 @@ def extract_with_password_dict(
         return False, "密码词典为空", None
     
     logger.info(f"正在使用密码词典尝试 ({dict_size} 个密码, 每个超时 {timeout_per_password}秒)")
+    use_full_timeout_directly = min(dict_size, max_retries) == 1
+    if use_full_timeout_directly:
+        logger.info(
+            f"仅有 1 个密码候选，直接使用完整解压超时: {file_path} "
+            f"({full_extraction_timeout}秒)"
+        )
     
     # 尝试词典中的密码，每个密码有独立的超时
     total_start = time.time()
@@ -839,7 +877,14 @@ def extract_with_password_dict(
         try:
             # 每个密码尝试有独立的超时
             logger.debug(f"尝试密码 {attempt+1}/{min(dict_size, max_retries)}: {password}")
-            success, msg = extract_archive(file_path, extract_dir, password, timeout=timeout_per_password, task_id=task_id)
+            attempt_timeout = full_extraction_timeout if use_full_timeout_directly else timeout_per_password
+            success, msg = extract_archive(
+                file_path,
+                extract_dir,
+                password,
+                timeout=attempt_timeout,
+                task_id=task_id
+            )
             attempt_elapsed = time.time() - attempt_start
             
             if success:
@@ -849,8 +894,29 @@ def extract_with_password_dict(
                 logger.info(f"✅ 成功解压 {file_path} (尝试 {attempt+1}, 耗时 {attempt_elapsed:.1f}s)")
                 return True, "解压成功", password
             else:
-                # 检查是否是c6 password 错误 vs 超时
-                if "超时" in msg or "timeout" in msg.lower():
+                if (not use_full_timeout_directly and _is_timeout_message(msg)
+                    and full_extraction_timeout > timeout_per_password):
+                    logger.warning(
+                        f"密码 {attempt+1} 短超时未完成 ({attempt_elapsed:.1f}s)，"
+                        f"改用完整解压超时重试"
+                    )
+                    success, retry_msg = extract_archive(
+                        file_path,
+                        extract_dir,
+                        password,
+                        timeout=full_extraction_timeout,
+                        task_id=task_id
+                    )
+                    if success:
+                        PASSWORD_SUCCESS_CACHE[file_path] = password
+                        save_password_cache()
+                        logger.info(f"✅ 成功解压 {file_path} (尝试 {attempt+1}, 长超时重试成功)")
+                        return True, "解压成功", password
+                    if not _is_password_failure_message(retry_msg):
+                        return False, retry_msg, password
+                    msg = retry_msg
+
+                if _is_timeout_message(msg):
                     logger.warning(f"密码 {attempt+1} 尝试超时 ({attempt_elapsed:.1f}s)，继续尝试下一个")
                 else:
                     logger.debug(f"密码 {attempt+1} 失败: {msg} ({attempt_elapsed:.1f}s)")
@@ -1204,7 +1270,10 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'file': archive_file,
                             'message': msg
                         }
-                    logger.error(f"密码解压失败 {archive_file}: {msg}")
+                    log_prefix = "密码解压失败" if (
+                        _is_password_failure_message(msg) or '所有密码都失败' in msg
+                    ) else "解压失败"
+                    logger.error(f"{log_prefix} {archive_file}: {msg}")
             else:
                 with extraction_lock:
                     extraction_status[task_id] = {
