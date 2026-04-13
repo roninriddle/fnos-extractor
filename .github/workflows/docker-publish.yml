@@ -4,11 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-    tags-ignore:
-      - 'v*-test'
 
 jobs:
   build-and-push:
+    if: ${{ !endsWith(github.ref_name, '-test') }}
     name: Build and push release Docker image
     runs-on: ubuntu-latest
     steps:
