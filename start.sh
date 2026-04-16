@@ -4,7 +4,7 @@
 
 set -e
 
-echo "🚀 FNOS 批量解压工具启动脚本"
+echo "🚀 FNOS 批量文件处理工具启动脚本"
 echo "================================"
 
 # 检查 Docker
@@ -15,12 +15,15 @@ fi
 
 echo "✓ Docker 已安装"
 
-# 检查 docker-compose
-if ! command -v docker-compose &> /dev/null; then
-    echo "⚠️  docker-compose 未安装，尝试使用 docker compose..."
+# 优先使用 docker compose，兼容旧版 docker-compose
+if docker compose version &> /dev/null; then
     COMPOSE_CMD="docker compose"
-else
+elif command -v docker-compose &> /dev/null; then
+    echo "⚠️  未检测到 docker compose，回退到 docker-compose"
     COMPOSE_CMD="docker-compose"
+else
+    echo "❌ 未找到 docker compose / docker-compose"
+    exit 1
 fi
 
 echo "✓ 准备启动容器"

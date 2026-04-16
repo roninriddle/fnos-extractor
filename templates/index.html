@@ -313,6 +313,12 @@
             transition: width 0.3s;
         }
 
+        .progress-detail {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+
         .task-log {
             background: #f5f5f5;
             border-radius: 6px;
@@ -830,7 +836,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version-badge">v1.3.22</div>
+            <div class="version-badge">v{{ app_version }}</div>
             <h1>📦 FNOS 批量文件处理</h1>
             <p>智能扫描 • 批量重命名 • 多卷支持 • 批量解压</p>
         </div>
@@ -1027,6 +1033,7 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
+                    <div class="progress-detail" id="currentProgressText">等待开始...</div>
                 </div>
                 <div class="task-log" id="taskLog"></div>
                 
@@ -2191,6 +2198,7 @@
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressPercent').textContent = '0%';
             document.getElementById('progressText').textContent = `0/${selected.length}`;
+            document.getElementById('currentProgressText').textContent = '等待开始...';
 
             try {
                 await fetch('/api/extraction/reset', { method: 'POST' });
@@ -2245,11 +2253,27 @@
                     Object.entries(status).filter(([taskId]) => currentTaskIds.includes(taskId))
                 );
 
-                let successCount = 0;
                 const logs = [];
+                let overallUnits = 0;
+                const activeProgressItems = [];
+                let queuedCount = 0;
 
                 for (const [taskId, taskStatus] of Object.entries(finalStatus)) {
-                    if (taskStatus.status === 'success') successCount++;
+                    const rawProgress = Number(taskStatus.progress);
+                    const taskProgress = Number.isFinite(rawProgress)
+                        ? Math.max(0, Math.min(100, Math.round(rawProgress)))
+                        : 0;
+                    const isDone = ['success', 'failed', 'error', 'stopped'].includes(taskStatus.status);
+                    overallUnits += isDone ? 100 : taskProgress;
+
+                    if (taskStatus.status === 'processing') {
+                        const fileName = taskStatus.file.split('/').pop();
+                        activeProgressItems.push(
+                            taskProgress > 0 ? `${fileName} ${taskProgress}%` : `${fileName} 处理中`
+                        );
+                    } else if (taskStatus.status === 'queued') {
+                        queuedCount++;
+                    }
                     
                     const icon = taskStatus.status === 'success' ? '✓' :
                                  taskStatus.status === 'error' ? '✗' :
@@ -2260,10 +2284,22 @@
                 }
 
                 completed = Object.values(finalStatus).filter(s => ['success', 'failed', 'error', 'stopped'].includes(s.status)).length;
+                const overallPercent = total > 0 ? Math.round(overallUnits / total) : 0;
 
-                document.getElementById('progressFill').style.width = (completed / total * 100) + '%';
-                document.getElementById('progressPercent').textContent = Math.round(completed / total * 100) + '%';
+                document.getElementById('progressFill').style.width = overallPercent + '%';
+                document.getElementById('progressPercent').textContent = overallPercent + '%';
                 document.getElementById('progressText').textContent = `${completed}/${total}`;
+                if (activeProgressItems.length === 1) {
+                    document.getElementById('currentProgressText').textContent = `当前文件: ${activeProgressItems[0]}`;
+                } else if (activeProgressItems.length > 1) {
+                    const previewItems = activeProgressItems.slice(0, 3);
+                    const suffix = activeProgressItems.length > 3 ? ` 等${activeProgressItems.length}个任务` : '';
+                    document.getElementById('currentProgressText').textContent = `当前任务: ${previewItems.join(' | ')}${suffix}`;
+                } else if (queuedCount > 0 && completed < total) {
+                    document.getElementById('currentProgressText').textContent = `当前任务: ${queuedCount} 个任务排队中`;
+                } else {
+                    document.getElementById('currentProgressText').textContent = completed >= total ? '全部任务已完成' : '正在处理...';
+                }
                 document.getElementById('taskLog').innerHTML = logs.map(log => `<div class="log-item">${log}</div>`).join('');
 
                 if (completed >= total) break;

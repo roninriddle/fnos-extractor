@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-FNOS 批量解压工具
-支持递归扫描、密码检测和Web界面
-版本: 1.3.22
+FNOS 批量文件处理工具
+支持递归扫描、密码检测和 Web 界面
+版本: 1.3.23
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.22'
+APP_VERSION = '1.3.23'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -724,16 +724,35 @@ def extract_archive(
         else:
             return False, "不支持的格式"
 
+        uses_7z_progress = bool(cmd) and cmd[0] == '7z'
+        if uses_7z_progress and '-bsp1' not in cmd:
+            cmd.insert(1, '-bsp1')
+
         # 直接把子进程输出写入临时文件，避免大体积输出填满 PIPE 后卡死，
         # 导致明明已经解压成功却被误判成“超时/密码失败”。
         with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode='w+t', encoding='utf-8', errors='ignore') as stdout_buffer, \
              tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode='w+t', encoding='utf-8', errors='ignore') as stderr_buffer:
             process = subprocess.Popen(cmd, stdout=stdout_buffer, stderr=stderr_buffer, text=True)
             start_time = time.time()
+            last_reported_progress = None
 
             while True:
                 if process.poll() is not None:
                     break
+
+                if uses_7z_progress and task_id:
+                    parsed_progress = _extract_progress_percent(
+                        _read_buffer_tail(stdout_buffer),
+                        _read_buffer_tail(stderr_buffer)
+                    )
+                    if parsed_progress is not None and parsed_progress != last_reported_progress:
+                        last_reported_progress = parsed_progress
+                        _update_task_progress(
+                            task_id,
+                            file_path,
+                            parsed_progress,
+                            f'正在解压... ({parsed_progress}%)'
+                        )
 
                 if task_id:
                     with control_lock:
@@ -815,6 +834,35 @@ def _is_timeout_message(message: Optional[str]) -> bool:
     lowered = str(message).lower()
     return '超时' in message or 'timeout' in lowered
 
+def _read_buffer_tail(buffer, max_chars: int = 4096) -> str:
+    """读取输出缓冲区尾部，用于解析 7z 实时进度。"""
+    try:
+        buffer.seek(0, os.SEEK_END)
+        current_pos = buffer.tell()
+        seek_pos = max(0, current_pos - max_chars)
+        buffer.seek(seek_pos)
+        tail = buffer.read()
+        buffer.seek(current_pos)
+        return tail or ''
+    except Exception:
+        return ''
+
+def _extract_progress_percent(*chunks: str) -> Optional[int]:
+    """从命令输出中提取最新的百分比进度。"""
+    matches = []
+    for chunk in chunks:
+        if not chunk:
+            continue
+        matches.extend(re.findall(r'(?<!\d)(100|[1-9]?\d)%', chunk))
+
+    if not matches:
+        return None
+
+    try:
+        return max(0, min(100, int(matches[-1])))
+    except (TypeError, ValueError):
+        return None
+
 def extract_with_password_dict(
     file_path: str,
     extract_dir: str,
@@ -835,6 +883,11 @@ def extract_with_password_dict(
     if file_path in PASSWORD_SUCCESS_CACHE:
         cached_pwd = PASSWORD_SUCCESS_CACHE[file_path]
         logger.info(f"尝试缓存密码: {file_path}")
+        _update_task_message(
+            task_id,
+            file_path,
+            f'需要密码，正在尝试缓存密码... (完整解压超时{full_extraction_timeout}秒)'
+        )
         success, msg = extract_archive(
             file_path,
             extract_dir,
@@ -848,6 +901,13 @@ def extract_with_password_dict(
         retry_count += 1
         if _is_password_failure_message(msg):
             logger.warning(f"缓存密码失效 {file_path}: {msg}，将尝试词典密码")
+            PASSWORD_SUCCESS_CACHE.pop(file_path, None)
+            save_password_cache()
+            _update_task_message(
+                task_id,
+                file_path,
+                _build_password_attempt_message(file_path, max_retries=max_retries)
+            )
         else:
             return False, msg, cached_pwd
     
@@ -899,6 +959,11 @@ def extract_with_password_dict(
                     logger.warning(
                         f"密码 {attempt+1} 短超时未完成 ({attempt_elapsed:.1f}s)，"
                         f"改用完整解压超时重试"
+                    )
+                    _update_task_message(
+                        task_id,
+                        file_path,
+                        f'密码 {attempt+1} 短超时未完成，正在用完整解压超时重试... ({full_extraction_timeout}秒)'
                     )
                     success, retry_msg = extract_archive(
                         file_path,
@@ -1187,6 +1252,52 @@ def _delete_archive_files(archive_file: str) -> None:
         except Exception as e:
             logger.warning(f"自动删除压缩包失败 {file_path}: {e}")
 
+def _update_task_message(task_id: Optional[str], archive_file: str, message: str) -> None:
+    """更新进行中任务的提示文案。"""
+    if not task_id:
+        return
+    with extraction_lock:
+        current = extraction_status.get(task_id, {})
+        extraction_status[task_id] = {
+            'status': 'processing',
+            'file': archive_file,
+            'progress': current.get('progress', 0),
+            'message': message
+        }
+
+def _update_task_progress(task_id: Optional[str], archive_file: str, progress: int, message: Optional[str] = None) -> None:
+    """更新当前任务的解压百分比。"""
+    if not task_id:
+        return
+    bounded_progress = max(0, min(100, int(progress)))
+    with extraction_lock:
+        current = extraction_status.get(task_id, {})
+        extraction_status[task_id] = {
+            'status': 'processing',
+            'file': archive_file,
+            'progress': bounded_progress,
+            'message': message or current.get('message', '正在解压...')
+        }
+
+def _build_password_attempt_message(file_path: str, max_retries: int = 5) -> str:
+    """根据当前密码尝试策略生成准确的前端提示。"""
+    password_timeout = timeout_settings.get('password_timeout', 15)
+    full_extraction_timeout = timeout_settings.get('extraction_timeout', 300)
+
+    if file_path in PASSWORD_SUCCESS_CACHE:
+        return f'需要密码，正在尝试缓存密码... (完整解压超时{full_extraction_timeout}秒)'
+
+    candidate_count = min(len(PASSWORD_DICT), max_retries)
+    if candidate_count == 0:
+        return '需要密码，但密码词典为空'
+    if candidate_count <= 1:
+        return f'需要密码，正在尝试唯一密码... (完整解压超时{full_extraction_timeout}秒)'
+
+    return (
+        f'需要密码，正在尝试词典密码... '
+        f'(每个密码{password_timeout}秒短超时，必要时自动改用完整解压)'
+    )
+
 def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, extraction_semaphore: threading.Semaphore):
     """处理单个解压任务，支持暂停/继续/停止"""
     try:
@@ -1237,13 +1348,11 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
 
             if is_encrypted:
                 password_timeout = timeout_settings.get('password_timeout', 15)
-                with extraction_lock:
-                    extraction_status[task_id] = {
-                        'status': 'processing',
-                        'file': archive_file,
-                        'progress': 0,
-                        'message': f'需要密码，正在尝试... (每个密码{password_timeout}秒超时)'
-                    }
+                _update_task_message(
+                    task_id,
+                    archive_file,
+                    _build_password_attempt_message(archive_file, max_retries=5)
+                )
 
                 success, msg, used_pwd = extract_with_password_dict(
                     archive_file,
@@ -1257,6 +1366,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         extraction_status[task_id] = {
                             'status': 'success',
                             'file': archive_file,
+                            'progress': 100,
                             'message': f"成功 (密码: {used_pwd})",
                             'password': used_pwd
                         }
@@ -1264,10 +1374,12 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         _delete_archive_files(archive_file)
                 else:
                     final_status = 'stopped' if '已停止' in msg else 'failed'
+                    current_progress = extraction_status.get(task_id, {}).get('progress', 0)
                     with extraction_lock:
                         extraction_status[task_id] = {
                             'status': final_status,
                             'file': archive_file,
+                            'progress': current_progress,
                             'message': msg
                         }
                     log_prefix = "密码解压失败" if (
@@ -1289,16 +1401,19 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         extraction_status[task_id] = {
                             'status': 'success',
                             'file': archive_file,
+                            'progress': 100,
                             'message': '成功'
                         }
                     if extraction_options.get('auto_delete_success', False):
                         _delete_archive_files(archive_file)
                 else:
                     final_status = 'stopped' if '已停止' in msg else 'failed'
+                    current_progress = extraction_status.get(task_id, {}).get('progress', 0)
                     with extraction_lock:
                         extraction_status[task_id] = {
                             'status': final_status,
                             'file': archive_file,
+                            'progress': current_progress,
                             'message': msg
                         }
                     logger.error(f"解压失败 {archive_file}: {msg}")
@@ -1315,7 +1430,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
 # Web 路由
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', app_version=APP_DISPLAY_VERSION)
 
 @app.route('/api/scan', methods=['POST'])
 def scan_directory():
