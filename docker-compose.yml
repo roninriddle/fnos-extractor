@@ -12,11 +12,12 @@ services:
       - "5000:5000"
     volumes:
       # 挂载下载目录
-      - /vol1/1000/Temp:/vol1/1000/Temp
+      - /vol1/1000/Temp:/temp
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Shanghai
       - APP_TIMEZONE=Asia/Shanghai
+      - FNOS_MOUNT_PATH=/temp
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]

@@ -2,7 +2,7 @@
 """
 FNOS 批量文件处理工具
 支持递归扫描、密码检测和 Web 界面
-版本: 1.3.24
+版本: 1.3.25
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.24'
+APP_VERSION = '1.3.25'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -51,7 +51,19 @@ MULTIPART_EXTENSIONS = (
     '.Z01', '.z01', '.Z02', '.z02', '.Z03', '.z03', '.Z04', '.z04', '.Z05', '.z05',
     '.r00', '.r01', '.r02', '.r03', '.r04', '.r05', '.r06', '.r07', '.r08', '.r09',
 )
-DEFAULT_MOUNT_PATH = '/vol1/1000/Temp'
+
+def _resolve_default_mount_path() -> str:
+    configured = os.environ.get('FNOS_MOUNT_PATH') or os.environ.get('DEFAULT_MOUNT_PATH')
+    if configured:
+        return configured
+
+    for candidate in ('/temp', '/vol1/1000/Temp'):
+        if Path(candidate).exists():
+            return candidate
+
+    return '/vol1/1000/Temp'
+
+DEFAULT_MOUNT_PATH = _resolve_default_mount_path()
 LOG_FILE_PATH = Path(os.environ.get('FNOS_LOG_FILE', '/app/fnos.log'))
 MAX_CONCURRENT_EXTRACTIONS = 32
 
@@ -685,7 +697,8 @@ def extract_archive(
     extract_dir: str,
     password: Optional[str] = None,
     timeout: Optional[int] = None,
-    task_id: Optional[str] = None
+    task_id: Optional[str] = None,
+    force_7z_zip: bool = False
 ) -> Tuple[bool, str]:
     """
     解压文件
@@ -726,8 +739,12 @@ def extract_archive(
 
         # ZIP格式
         elif file_name.endswith('.zip'):
-            if password and prefer_7z_for_password:
-                cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}', f'-p{password}']
+            if force_7z_zip or (password and prefer_7z_for_password):
+                cmd = ['7z', 'x', '-y', file_path, f'-o{extract_dir}']
+                if password:
+                    cmd.append(f'-p{password}')
+                else:
+                    cmd.append('-p-')
             elif password:
                 cmd = ['unzip', '-P', password, '-o', file_path, '-d', extract_dir]
             else:
@@ -843,6 +860,24 @@ def extract_archive(
             return True, "解压成功"
         else:
             error_output = (result.stderr + result.stdout).lower()
+
+            if file_name.endswith('.zip') and cmd[0] == 'unzip' and _is_zip_overlap_warning(result.stderr + result.stdout):
+                logger.warning(
+                    f"unzip 判定 ZIP 存在 overlapped components，改用 7z 重试: {file_path}"
+                )
+                _update_task_message(
+                    task_id,
+                    file_path,
+                    'unzip 触发 zip-bomb 保护，正在改用 7z 重试...'
+                )
+                return extract_archive(
+                    file_path,
+                    extract_dir,
+                    password=password,
+                    timeout=timeout,
+                    task_id=task_id,
+                    force_7z_zip=True
+                )
             
             # 检查是否是密码相关错误
             if ('password' in error_output or 'wrong password' in error_output or
@@ -883,6 +918,11 @@ def _is_timeout_message(message: Optional[str]) -> bool:
         return False
     lowered = str(message).lower()
     return '超时' in message or 'timeout' in lowered
+
+def _is_zip_overlap_warning(output: str) -> bool:
+    """识别 unzip 对重叠 ZIP 组件的 zip-bomb 保护性拒绝。"""
+    lowered = (output or '').lower()
+    return 'overlapped components' in lowered and 'possible zip bomb' in lowered
 
 def _read_buffer_tail(buffer, max_chars: int = 4096) -> str:
     """读取输出缓冲区尾部，用于解析 7z 实时进度。"""
@@ -1175,6 +1215,11 @@ def _split_filename_parts(file_path: str) -> Tuple[str, str]:
         return name[:-len(extension)], extension
     return name, ''
 
+def _archive_output_name(file_path: str) -> str:
+    """生成同名解压目录名，兼容 tar.* 和多卷等多后缀格式。"""
+    base_name, _ = _split_filename_parts(file_path)
+    return base_name or Path(file_path).stem or Path(file_path).name
+
 def _get_cached_encryption(file_path: str) -> Optional[bool]:
     """获取缓存的加密状态（线程安全）"""
     with encryption_cache_lock:
@@ -1342,10 +1387,12 @@ def _wait_if_paused_or_stopped(task_id: str, archive_file: str, message: str) ->
 
         if should_stop:
             with extraction_lock:
+                current = extraction_status.get(task_id, {})
                 extraction_status[task_id] = {
                     'status': 'stopped',
                     'file': archive_file,
-                    'message': '已停止'
+                    'message': '已停止',
+                    'extract_dir': current.get('extract_dir')
                 }
             return True
 
@@ -1353,10 +1400,12 @@ def _wait_if_paused_or_stopped(task_id: str, archive_file: str, message: str) ->
             return False
 
         with extraction_lock:
+            current = extraction_status.get(task_id, {})
             extraction_status[task_id] = {
                 'status': 'paused',
                 'file': archive_file,
-                'message': message
+                'message': message,
+                'extract_dir': current.get('extract_dir')
             }
         time.sleep(0.3)
 
@@ -1416,7 +1465,8 @@ def _update_task_message(task_id: Optional[str], archive_file: str, message: str
             'status': 'processing',
             'file': archive_file,
             'progress': current.get('progress', 0),
-            'message': message
+            'message': message,
+            'extract_dir': current.get('extract_dir')
         }
 
 def _update_task_progress(task_id: Optional[str], archive_file: str, progress: int, message: Optional[str] = None) -> None:
@@ -1430,7 +1480,8 @@ def _update_task_progress(task_id: Optional[str], archive_file: str, progress: i
             'status': 'processing',
             'file': archive_file,
             'progress': bounded_progress,
-            'message': message or current.get('message', '正在解压...')
+            'message': message or current.get('message', '正在解压...'),
+            'extract_dir': current.get('extract_dir')
         }
 
 def _build_password_attempt_message(file_path: str, max_retries: int = 5) -> str:
@@ -1469,12 +1520,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
 
             actual_extract_dir = extract_dir
             if extraction_options.get('extract_to_same_name', False) and extraction_options.get('extract_mode') != 'to_same_name':
-                archive_name = os.path.basename(archive_file)
-                base_name = archive_name
-                for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
-                    if base_name.lower().endswith(ext):
-                        base_name = base_name[:-len(ext)]
-                        break
+                base_name = _archive_output_name(archive_file)
                 actual_extract_dir = os.path.join(extract_dir, base_name)
 
             with extraction_lock:
@@ -1482,7 +1528,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                     'status': 'processing',
                     'file': archive_file,
                     'progress': 0,
-                    'message': '准备解压目录...'
+                    'message': '准备解压目录...',
+                    'extract_dir': actual_extract_dir
                 }
 
             check_existing_tree = extraction_options.get('extract_mode') == 'to_same_name'
@@ -1496,7 +1543,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         'status': 'failed',
                         'file': archive_file,
                         'progress': 0,
-                        'message': dir_error
+                        'message': dir_error,
+                        'extract_dir': actual_extract_dir
                     }
                 logger.error(f"解压目录读写权限不足 {archive_file}: {dir_error}")
                 return
@@ -1506,7 +1554,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                     'status': 'processing',
                     'file': archive_file,
                     'progress': 0,
-                    'message': '检测加密状态...'
+                    'message': '检测加密状态...',
+                    'extract_dir': actual_extract_dir
                 }
 
             is_archive, is_encrypted = is_archive_encrypted(archive_file)
@@ -1516,7 +1565,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                     extraction_status[task_id] = {
                         'status': 'failed',
                         'file': archive_file,
-                        'message': '不是有效的压缩包'
+                        'message': '不是有效的压缩包',
+                        'extract_dir': actual_extract_dir
                     }
                 return
 
@@ -1545,7 +1595,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'file': archive_file,
                             'progress': 100,
                             'message': f"成功 (密码: {used_pwd})",
-                            'password': used_pwd
+                            'password': used_pwd,
+                            'extract_dir': actual_extract_dir
                         }
                     if extraction_options.get('auto_delete_success', False):
                         _delete_archive_files(archive_file)
@@ -1557,7 +1608,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'status': final_status,
                             'file': archive_file,
                             'progress': current_progress,
-                            'message': msg
+                            'message': msg,
+                            'extract_dir': actual_extract_dir
                         }
                     log_prefix = "密码解压失败" if (
                         _is_password_failure_message(msg) or '所有密码都失败' in msg
@@ -1569,7 +1621,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         'status': 'processing',
                         'file': archive_file,
                         'progress': 0,
-                        'message': '无加密，正在解压...'
+                        'message': '无加密，正在解压...',
+                        'extract_dir': actual_extract_dir
                     }
 
                 success, msg = extract_archive(archive_file, actual_extract_dir, task_id=task_id)
@@ -1579,7 +1632,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'status': 'success',
                             'file': archive_file,
                             'progress': 100,
-                            'message': '成功'
+                            'message': '成功',
+                            'extract_dir': actual_extract_dir
                         }
                     if extraction_options.get('auto_delete_success', False):
                         _delete_archive_files(archive_file)
@@ -1591,7 +1645,8 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'status': final_status,
                             'file': archive_file,
                             'progress': current_progress,
-                            'message': msg
+                            'message': msg,
+                            'extract_dir': actual_extract_dir
                         }
                     logger.error(f"解压失败 {archive_file}: {msg}")
     
@@ -1607,7 +1662,12 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
 # Web 路由
 @app.route('/')
 def index():
-    return render_template('index.html', app_version=APP_DISPLAY_VERSION)
+    return render_template(
+        'index.html',
+        app_version=APP_DISPLAY_VERSION,
+        default_mount_path=DEFAULT_MOUNT_PATH,
+        default_extract_path=os.path.join(DEFAULT_MOUNT_PATH, 'extracted')
+    )
 
 @app.route('/api/scan', methods=['POST'])
 def scan_directory():
@@ -1811,8 +1871,8 @@ def extract():
         extraction_options['auto_delete_success'] = auto_delete_success
         extraction_options['extract_mode'] = extract_mode
 
-        # 仅在确实需要指定目录时创建基目录，避免“当前文件夹”模式误创建 extracted
-        if extract_mode in {'to_specified', 'to_same_name'}:
+        # 仅在确实需要指定目录时检查基目录，避免其他模式误触碰隐藏的 extracted 路径
+        if extract_mode == 'to_specified':
             dir_ok, dir_error = _ensure_read_write_directory(extract_base)
             if not dir_ok:
                 logger.error(f"解压目录读写权限不足 {extract_base}: {dir_error}")
@@ -1822,6 +1882,7 @@ def extract():
             extraction_control['stop'] = False
 
         tasks = {}
+        task_extract_dirs = {}
         for i, archive in enumerate(archives):
             task_id = _next_task_id()
             tasks[task_id] = archive
@@ -1830,15 +1891,10 @@ def extract():
             if extract_mode == 'to_current':
                 extract_dir = str(Path(archive).parent)
             elif extract_mode == 'to_same_name':
-                archive_name = os.path.basename(archive)
-                base_name = archive_name
-                for ext in ['.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar', '.zip', '.rar']:
-                    if base_name.lower().endswith(ext):
-                        base_name = base_name[:-len(ext)]
-                        break
-                extract_dir = os.path.join(extract_base, base_name)
+                extract_dir = os.path.join(str(Path(archive).parent), _archive_output_name(archive))
             else:
                 extract_dir = extract_base
+            task_extract_dirs[task_id] = extract_dir
 
             thread = threading.Thread(
                 target=process_extraction_task,
@@ -1853,6 +1909,7 @@ def extract():
             'extract_dir': extract_base,
             'task_count': len(tasks),
             'tasks': tasks,
+            'extract_dirs': task_extract_dirs,
             'options': {
                 'extract_mode': extract_mode,
                 'auto_delete_success': auto_delete_success

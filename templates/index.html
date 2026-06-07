@@ -846,7 +846,7 @@
             <div class="section">
                 <div class="section-title">扫描设置</div>
                 <div class="input-group">
-                    <input type="text" id="scanPath" placeholder="输入目录路径 (如: /vol1/1000/Temp)" value="/vol1/1000/Temp">
+                    <input type="text" id="scanPath" placeholder="输入目录路径 (如: {{ default_mount_path }})" value="{{ default_mount_path }}">
                     <button class="btn-primary" onclick="scanDirectory()">🔍 扫描</button>
                     <button class="btn-secondary" onclick="openSettingsModal()">⚙️ 设置</button>
                 </div>
@@ -1002,9 +1002,9 @@
                                     </label>
                                 </div>
                                 <div id="extractPathGroup" class="input-group" style="margin-bottom: 0; margin-top: 10px;">
-                                    <input type="text" id="extractPath" placeholder="解压目录" value="/vol1/1000/Temp/extracted">
+                                    <input type="text" id="extractPath" placeholder="解压目录" value="{{ default_extract_path }}">
                                 </div>
-                                <small style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
+                                <small id="extractPathHint" style="color: #999; margin-left: 4px; display: block;">选择解压方式，指定目录可自定义路径</small>
                                 <label style="display: flex; align-items: center; margin-top: 12px; cursor: pointer;">
                                     <input type="checkbox" id="autoDeleteSuccess" style="margin-right: 8px; cursor: pointer;">
                                     <span style="color: #333; font-size: 14px;">🗑️ 自动删除成功解压的压缩包</span>
@@ -1091,8 +1091,8 @@
                 <div class="modal-body">
                     <h3 style="margin-bottom: 10px; color: #333; font-size: 14px;">常用目录</h3>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <button class="btn-secondary" onclick="setDefaultDir('/vol1/1000/Temp')" style="text-align: left;">
-                            📂 /vol1/1000/Temp
+                        <button class="btn-secondary" onclick="setDefaultDir('{{ default_mount_path }}')" style="text-align: left;">
+                            📂 {{ default_mount_path }}
                         </button>
                         <button class="btn-secondary" onclick="setDefaultDir('/home')" style="text-align: left;">
                             📂 /home
@@ -1106,7 +1106,7 @@
                         </div>
                     </div>
                     <p style="margin-top: 15px; font-size: 12px; color: #999;">
-                        当前目录: <strong id="currentDirText">/vol1/1000/Temp</strong>
+                        当前目录: <strong id="currentDirText">{{ default_mount_path }}</strong>
                     </p>
                 </div>
             </div>
@@ -1296,10 +1296,15 @@
                 // 解压路径输入框联动
                 function toggleExtractPath() {
                     const group = document.getElementById('extractPathGroup');
+                    const hint = document.getElementById('extractPathHint');
                     if (document.getElementById('modeSpecified').checked) {
                         group.style.display = '';
+                        hint.textContent = '指定目录可自定义路径';
                     } else {
                         group.style.display = 'none';
+                        hint.textContent = document.getElementById('modeSameName').checked
+                            ? '同名文件夹将创建在每个压缩包所在目录下'
+                            : '将直接解压到每个压缩包所在目录';
                     }
                 }
                 // 页面加载时初始化一次
@@ -1316,11 +1321,20 @@
         let currentScanMode = 'archives';
         let scannedExtensions = [];
         let currentTask = null;
-        let currentPath = '/vol1/1000/Temp';
+        let currentPath = '{{ default_mount_path }}';
         let pendingCompletion = null;  // 待显示的完成通知
         let originalTitle = document.title;
         let concurrentSaveTimer = null;
         let lastAppliedConcurrent = null;
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
         
         // 页面可见性检测
         document.addEventListener('visibilitychange', function() {
@@ -1606,6 +1620,12 @@
                 summaryHtml += `<div class="summary-section">
                     <div class="summary-title">🗑️ 已自动删除</div>
                     <div class="summary-list">成功解压的压缩包已按设置自动删除。</div>
+                </div>`;
+            }
+            if (!summaryHtml) {
+                summaryHtml = `<div class="summary-section">
+                    <div class="summary-title">完成，但没有拿到任务明细</div>
+                    <div class="summary-list">请打开日志查看本次解压详情。</div>
                 </div>`;
             }
             
@@ -2250,7 +2270,7 @@
                 return;
             }
 
-            const extractTo = document.getElementById('extractPath').value.trim() || '/vol1/1000/Temp';
+            const extractTo = document.getElementById('extractPath').value.trim() || currentPath;
             const autoDeleteSuccess = document.getElementById('autoDeleteSuccess').checked;
             let extractMode = 'to_specified';
             if (document.getElementById('modeCurrent').checked) extractMode = 'to_current';
@@ -2289,12 +2309,23 @@
                 try {
                     data = JSON.parse(text);
                 } catch (err) {
-                    alert('启动解压失败: ' + text);
-                    return;
+                    throw new Error(text || '服务端返回了无法解析的响应');
+                }
+
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || `服务端返回 HTTP ${response.status}`);
+                }
+                if (!Number.isInteger(data.task_count) || data.task_count <= 0 || !data.tasks || Object.keys(data.tasks).length === 0) {
+                    throw new Error('服务端没有返回有效的解压任务信息');
                 }
 
                 currentTask = data;
-                monitorProgress();
+                monitorProgress().catch(e => {
+                    document.getElementById('progressSection').style.display = 'none';
+                    document.getElementById('listSection').style.display = 'block';
+                    updateWorkflowSection();
+                    alert('监控解压失败: ' + e.message);
+                });
             } catch (e) {
                 document.getElementById('progressSection').style.display = 'none';
                 document.getElementById('listSection').style.display = 'block';
@@ -2305,9 +2336,13 @@
 
         async function monitorProgress() {
             let completed = 0;
-            const total = currentTask.task_count;
+            const total = Number(currentTask.task_count);
             let finalStatus = {};
             const currentTaskIds = Object.keys(currentTask.tasks || {});
+
+            if (!Number.isInteger(total) || total <= 0 || currentTaskIds.length === 0) {
+                throw new Error('解压任务信息无效，无法监控进度');
+            }
 
             while (completed < total) {
                 const response = await fetch('/api/status');
@@ -2363,7 +2398,9 @@
                 } else {
                     document.getElementById('currentProgressText').textContent = completed >= total ? '全部任务已完成' : '正在处理...';
                 }
-                document.getElementById('taskLog').innerHTML = logs.map(log => `<div class="log-item">${log}</div>`).join('');
+                document.getElementById('taskLog').innerHTML = logs
+                    .map(log => `<div class="log-item">${escapeHtml(log)}</div>`)
+                    .join('');
 
                 if (completed >= total) break;
 
@@ -2372,21 +2409,31 @@
 
             // 生成成功失败清单
             const successList = [];
+            const successNames = [];
             const failList = [];
             const successFiles = [];
             for (const [taskId, taskStatus] of Object.entries(finalStatus)) {
                 const fileName = taskStatus.file.split('/').pop();
+                const extractDir = taskStatus.extract_dir
+                    || (currentTask.extract_dirs && currentTask.extract_dirs[taskId])
+                    || currentTask.extract_dir
+                    || '';
                 if (taskStatus.status === 'success') {
-                    successList.push(fileName);
+                    successNames.push(fileName);
+                    successList.push(
+                        `${escapeHtml(fileName)}<div style="font-size: 12px; color: #666; margin-top: 4px;">实际解压目录：${escapeHtml(extractDir)}</div>`
+                    );
                     successFiles.push(taskStatus.file);
                 } else if (taskStatus.status === 'failed' || taskStatus.status === 'error' || taskStatus.status === 'stopped') {
-                    failList.push(`${fileName} (${taskStatus.message})`);
+                    failList.push(
+                        `${escapeHtml(fileName)} (${escapeHtml(taskStatus.message)})`
+                    );
                 }
             }
 
             let summaryMsg = `✅ 解压完成!\n\n`;
             if (successList.length > 0) {
-                summaryMsg += `✓ 成功 (${successList.length}): ${successList.join(', ')}\n`;
+                summaryMsg += `✓ 成功 (${successList.length}): ${successNames.join(', ')}\n`;
             }
             if (failList.length > 0) {
                 summaryMsg += `\n✗ 失败 (${failList.length}):\n${failList.join('\n')}`;

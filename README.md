@@ -1,4 +1,4 @@
-# FNOS 批量文件处理工具 v1.3.24
+# FNOS 批量文件处理工具 v1.3.25
 
 🚀 生产级批量文件处理工具 - 支持 Web UI、密码破解、多卷文件、智能解压与批量重命名
 
@@ -61,7 +61,8 @@ docker pull roninriddle/fnos-extractor:latest
 docker run -d \
   --name fnos-extractor \
   -p 5000:5000 \
-  -v /path/to/archives:/vol1/1000/Temp \
+  -v /path/to/archives:/temp \
+  -e FNOS_MOUNT_PATH=/temp \
   roninriddle/fnos-extractor:latest
 
 # 访问 http://localhost:5000
@@ -75,7 +76,7 @@ cd fnos-extractor
 docker compose up -d
 ```
 
-仓库自带的 [docker-compose.yml](/Users/ronin/Downloads/fnos-extractor/docker-compose.yml) 默认使用正式版 `latest` 镜像。
+仓库自带的 [docker-compose.yml](docker-compose.yml) 默认使用正式版 `latest` 镜像，并把宿主目录挂载到容器内 `/temp`。
 
 ### 本地开发
 
@@ -137,18 +138,16 @@ python app.py
 
 ## 📦 版本信息
 
-**当前版本**: v1.3.24
+**当前版本**: v1.3.25
 
 **本次更新**:
-- 🗑️ 修复解压完成弹窗中手动删除压缩包失败但前端无明确反馈的问题
-- 📦 手动删除支持 `.001`、`.z01`、`.r00` 等多卷压缩包整组删除
-- ⚡ 并发数量改为运行中实时应用，排队任务会立即按新上限调度
-- 🛡️ 解压前同步检测指定目录真实读写权限，权限不足时直接给出可操作提示
-- 📁 同名文件夹已存在时预检旧目录内容权限，避免 7z 覆盖到一半才失败
-- 🧭 优化 7z `Operation not permitted` 报错提示，明确建议检查挂载权限或更换目录
-- 🧩 密码短超时自动完整重试不再记录为 ERROR，减少误报干扰
-- 🧪 补充删除接口和动态并发逻辑的回归检查
-- ✅ 本版已整理为正式版 1.3.24
+- 📁 默认挂载路径支持 `FNOS_MOUNT_PATH`，并优先自动识别容器内 `/temp`
+- 🧭 前端扫描路径与解压路径从后端配置生成，避免误用 `/vol1/1000/Temp`
+- 📦 “解压到同名文件夹”改为在压缩包所在目录下创建同名目录，不再依赖隐藏的指定目录
+- 🧯 修复启动解压失败被前端误显示为“解压完成”的问题
+- 🧩 ZIP 遇到 `overlapped components (possible zip bomb)` 时自动改用 7z 重试
+- 📊 完成弹窗显示每个任务的实际解压目录，便于判断输出位置
+- ✅ 本版已整理为正式版 1.3.25
 
 ---
 
@@ -162,4 +161,4 @@ python app.py
 
 ---
 
-**Last Updated**: 2026-06-07 | Version: 1.3.24
+**Last Updated**: 2026-06-07 | Version: 1.3.25
