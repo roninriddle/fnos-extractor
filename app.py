@@ -2,7 +2,7 @@
 """
 FNOS 批量文件处理工具
 支持递归扫描、密码检测和 Web 界面
-版本: 1.3.23
+版本: 1.3.24
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.23'
+APP_VERSION = '1.3.24'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -54,6 +54,45 @@ MULTIPART_EXTENSIONS = (
 DEFAULT_MOUNT_PATH = '/vol1/1000/Temp'
 LOG_FILE_PATH = Path(os.environ.get('FNOS_LOG_FILE', '/app/fnos.log'))
 MAX_CONCURRENT_EXTRACTIONS = 32
+
+class AdjustableConcurrencyLimiter:
+    """线程安全的可调并发限制器，允许排队任务实时感知新并发数。"""
+    def __init__(self, limit: int):
+        self._limit = limit
+        self._active = 0
+        self._condition = threading.Condition()
+
+    def acquire(self) -> None:
+        with self._condition:
+            while self._active >= self._limit:
+                self._condition.wait()
+            self._active += 1
+
+    def release(self) -> None:
+        with self._condition:
+            if self._active > 0:
+                self._active -= 1
+            self._condition.notify_all()
+
+    def set_limit(self, limit: int) -> None:
+        with self._condition:
+            self._limit = limit
+            self._condition.notify_all()
+
+    def state(self) -> Dict[str, int]:
+        with self._condition:
+            return {
+                'limit': self._limit,
+                'active': self._active
+            }
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.release()
+        return False
 
 def _has_command(cmd_name: str) -> bool:
     return shutil.which(cmd_name) is not None
@@ -196,6 +235,8 @@ extraction_options = {
 extraction_settings = {
     'concurrent_count': 1  # 并发解压文件数量（默认1个）
 }
+extraction_settings_lock = threading.Lock()
+extraction_concurrency_limiter = AdjustableConcurrencyLimiter(extraction_settings['concurrent_count'])
 timeout_settings = {
     'password_timeout': 15,        # 每个密码尝试的超时时间（秒）
     'extraction_timeout': 300,     # 单个文件解压的超时时间（秒）
@@ -653,6 +694,10 @@ def extract_archive(
     """
     try:
         actual_timeout = timeout if timeout is not None else timeout_settings.get('extraction_timeout', 300)
+        dir_ok, dir_error = _ensure_read_write_directory(extract_dir)
+        if not dir_ok:
+            return False, dir_error
+
         file_name = Path(file_path).name.lower()
         cmd = []
         prefer_7z_for_password = _contains_non_ascii(password)
@@ -812,11 +857,16 @@ def extract_archive(
                     return False, "需要密码"
             
             error_msg = result.stderr or result.stdout or "未知错误"
+            friendly_error = _build_friendly_extraction_error(error_msg, extract_dir)
             logger.error(f"解压命令失败 [{file_path}]: 返回码 {result.returncode}\n命令: {' '.join(cmd)}\n错误: {error_msg}")
-            return False, f"解压失败: {error_msg[:200]}"
+            return False, friendly_error
             
     except subprocess.TimeoutExpired:
-        logger.error(f"解压超时: {file_path} ({actual_timeout}秒)")
+        full_extraction_timeout = timeout_settings.get('extraction_timeout', 300)
+        if timeout is not None and actual_timeout < full_extraction_timeout:
+            logger.info(f"密码短超时未完成: {file_path} ({actual_timeout}秒)，等待调用方完整重试")
+        else:
+            logger.error(f"解压超时: {file_path} ({actual_timeout}秒)")
         return False, f"解压超时（{actual_timeout}秒）"
     except Exception as e:
         logger.error(f"解压异常 {file_path}: {e}")
@@ -862,6 +912,87 @@ def _extract_progress_percent(*chunks: str) -> Optional[int]:
         return max(0, min(100, int(matches[-1])))
     except (TypeError, ValueError):
         return None
+
+def _ensure_read_write_directory(directory: str, check_existing_tree: bool = False) -> Tuple[bool, str]:
+    """确认目录可创建，且当前进程可以实际读取、进入和写入。"""
+    try:
+        os.makedirs(directory, exist_ok=True)
+        if not os.access(directory, os.R_OK | os.W_OK | os.X_OK):
+            return False, (
+                f"解压目录读写权限不足: {directory}。"
+                f"请确认容器用户可以读取、进入并写入该目录，或改用有权限的目录后重试。"
+            )
+        try:
+            with os.scandir(directory):
+                pass
+        except Exception as e:
+            return False, (
+                f"解压目录不可读取: {directory}。"
+                f"请检查 Docker 挂载目录权限，或改用可读写目录后重试。原始错误: {e}"
+            )
+
+        probe_path = None
+        with tempfile.NamedTemporaryFile(prefix='.fnos-write-test-', dir=directory, delete=False) as probe:
+            probe.write(b'ok')
+            probe_path = probe.name
+        if probe_path and os.path.exists(probe_path):
+            os.remove(probe_path)
+
+        if check_existing_tree:
+            for root, dirs, files in os.walk(directory):
+                if not os.access(root, os.W_OK | os.X_OK):
+                    return False, (
+                        f"同名输出目录中已有不可写目录: {root}。"
+                        f"请删除该同名文件夹、修正权限，或更换解压目录后重试。"
+                    )
+                for name in dirs:
+                    dir_path = os.path.join(root, name)
+                    if not os.access(dir_path, os.W_OK | os.X_OK):
+                        return False, (
+                            f"同名输出目录中已有不可写目录: {dir_path}。"
+                            f"请删除该同名文件夹、修正权限，或更换解压目录后重试。"
+                        )
+                for name in files:
+                    file_path = os.path.join(root, name)
+                    if not os.access(file_path, os.W_OK):
+                        return False, (
+                            f"同名输出目录中已有不可覆盖文件: {file_path}。"
+                            f"请删除该同名文件夹、修正权限，或更换解压目录后重试。"
+                        )
+        return True, ''
+    except Exception as e:
+        logger.warning(f"解压目录读写权限不足 {directory}: {e}")
+        return False, (
+            f"解压目录读写权限不足: {directory}。请检查 Docker 挂载目录权限，"
+            f"或改用可读写目录后重试。原始错误: {e}"
+        )
+
+def _extract_failed_output_path(error_output: str) -> Optional[str]:
+    """从 7z/unrar 输出中提取无法写入的目标文件路径。"""
+    for line in error_output.splitlines():
+        if 'cannot open output file' not in line.lower():
+            continue
+        parts = [part.strip() for part in line.split(' : ') if part.strip()]
+        if parts:
+            return parts[-1]
+    return None
+
+def _build_friendly_extraction_error(error_output: str, extract_dir: str) -> str:
+    """把常见命令行错误转成更可操作的前端提示。"""
+    lowered = error_output.lower()
+    if (
+        'cannot open output file' in lowered
+        and ('operation not permitted' in lowered or 'permission denied' in lowered or 'errno=1' in lowered or 'errno=13' in lowered)
+    ):
+        failed_path = _extract_failed_output_path(error_output) or extract_dir
+        return (
+            f"目标目录读写权限不足或已有文件无法覆盖: {failed_path}。"
+            f"如果使用“解压到同名文件夹”，通常是旧的同名目录里已有不可覆盖文件；"
+            f"请删除该同名文件夹、检查 Docker 挂载权限，或改用可写目录后重试。"
+        )
+    if 'no space left on device' in lowered:
+        return f"目标磁盘空间不足: {extract_dir}。请清理空间后重试。"
+    return f"解压失败: {error_output[:200]}"
 
 def extract_with_password_dict(
     file_path: str,
@@ -1229,28 +1360,51 @@ def _wait_if_paused_or_stopped(task_id: str, archive_file: str, message: str) ->
             }
         time.sleep(0.3)
 
-def _delete_archive_files(archive_file: str) -> None:
-    """按配置删除已成功解压的压缩包，支持多卷。"""
+def _get_archive_delete_targets(archive_file: str) -> List[str]:
+    """获取压缩包删除目标，单文件返回自身，多卷返回整组文件。"""
     files_to_delete = [archive_file]
     first_volume = get_multipart_first_volume(archive_file)
     if first_volume:
         parent = Path(first_volume).parent
-        archives_in_dir = [
-            entry.path for entry in os.scandir(parent)
-            if entry.is_file(follow_symlinks=False) and _is_archive_file(entry.path, SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS)
-        ]
+        try:
+            archives_in_dir = [
+                entry.path for entry in os.scandir(parent)
+                if entry.is_file(follow_symlinks=False) and _is_archive_file(entry.path, SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS)
+            ]
+        except (OSError, PermissionError) as e:
+            logger.warning(f"读取多卷目录失败 {parent}: {e}")
+            return files_to_delete
         multipart_groups, _ = group_multipart_archives(archives_in_dir)
         for group in multipart_groups:
-            if group['first_volume'] == first_volume:
+            if os.path.normpath(group['first_volume']) == os.path.normpath(first_volume):
                 files_to_delete = group['volumes']
                 break
 
+    return list(dict.fromkeys(files_to_delete))
+
+def _delete_archive_files(archive_file: str) -> Tuple[List[str], List[Dict[str, str]]]:
+    """按配置删除已成功解压的压缩包，支持多卷。"""
+    deleted_files = []
+    failed_files = []
+    all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
+    files_to_delete = _get_archive_delete_targets(archive_file)
+
     for file_path in files_to_delete:
         try:
+            if not os.path.exists(file_path):
+                failed_files.append({'file': file_path, 'error': '文件不存在'})
+                continue
+            if not _is_archive_file(file_path, all_exts):
+                failed_files.append({'file': file_path, 'error': '不是有效的压缩包文件'})
+                continue
             os.remove(file_path)
+            deleted_files.append(file_path)
             logger.info(f"自动删除压缩包: {file_path}")
         except Exception as e:
+            failed_files.append({'file': file_path, 'error': str(e)})
             logger.warning(f"自动删除压缩包失败 {file_path}: {e}")
+
+    return deleted_files, failed_files
 
 def _update_task_message(task_id: Optional[str], archive_file: str, message: str) -> None:
     """更新进行中任务的提示文案。"""
@@ -1298,7 +1452,7 @@ def _build_password_attempt_message(file_path: str, max_retries: int = 5) -> str
         f'(每个密码{password_timeout}秒短超时，必要时自动改用完整解压)'
     )
 
-def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, extraction_semaphore: threading.Semaphore):
+def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, extraction_limiter: AdjustableConcurrencyLimiter):
     """处理单个解压任务，支持暂停/继续/停止"""
     try:
         with extraction_lock:
@@ -1309,17 +1463,9 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                 'message': '排队中，等待并发空位...'
             }
 
-        with extraction_semaphore:
+        with extraction_limiter:
             if _wait_if_paused_or_stopped(task_id, archive_file, '任务已暂停，等待继续...'):
                 return
-
-            with extraction_lock:
-                extraction_status[task_id] = {
-                    'status': 'processing',
-                    'file': archive_file,
-                    'progress': 0,
-                    'message': '检测加密状态...'
-                }
 
             actual_extract_dir = extract_dir
             if extraction_options.get('extract_to_same_name', False) and extraction_options.get('extract_mode') != 'to_same_name':
@@ -1330,7 +1476,38 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                         base_name = base_name[:-len(ext)]
                         break
                 actual_extract_dir = os.path.join(extract_dir, base_name)
-                os.makedirs(actual_extract_dir, exist_ok=True)
+
+            with extraction_lock:
+                extraction_status[task_id] = {
+                    'status': 'processing',
+                    'file': archive_file,
+                    'progress': 0,
+                    'message': '准备解压目录...'
+                }
+
+            check_existing_tree = extraction_options.get('extract_mode') == 'to_same_name'
+            dir_ok, dir_error = _ensure_read_write_directory(
+                actual_extract_dir,
+                check_existing_tree=check_existing_tree
+            )
+            if not dir_ok:
+                with extraction_lock:
+                    extraction_status[task_id] = {
+                        'status': 'failed',
+                        'file': archive_file,
+                        'progress': 0,
+                        'message': dir_error
+                    }
+                logger.error(f"解压目录读写权限不足 {archive_file}: {dir_error}")
+                return
+
+            with extraction_lock:
+                extraction_status[task_id] = {
+                    'status': 'processing',
+                    'file': archive_file,
+                    'progress': 0,
+                    'message': '检测加密状态...'
+                }
 
             is_archive, is_encrypted = is_archive_encrypted(archive_file)
 
@@ -1636,17 +1813,15 @@ def extract():
 
         # 仅在确实需要指定目录时创建基目录，避免“当前文件夹”模式误创建 extracted
         if extract_mode in {'to_specified', 'to_same_name'}:
-            try:
-                os.makedirs(extract_base, exist_ok=True)
-            except Exception as e:
-                logger.error(f"无法创建或访问解压目录 {extract_base}: {e}")
-                return jsonify({'error': f'无法访问或创建解压目录: {extract_base}'}), 500
+            dir_ok, dir_error = _ensure_read_write_directory(extract_base)
+            if not dir_ok:
+                logger.error(f"解压目录读写权限不足 {extract_base}: {dir_error}")
+                return jsonify({'error': dir_error}), 400
 
         with control_lock:
             extraction_control['stop'] = False
 
         tasks = {}
-        extraction_semaphore = threading.Semaphore(extraction_settings['concurrent_count'])
         for i, archive in enumerate(archives):
             task_id = _next_task_id()
             tasks[task_id] = archive
@@ -1662,13 +1837,12 @@ def extract():
                         base_name = base_name[:-len(ext)]
                         break
                 extract_dir = os.path.join(extract_base, base_name)
-                os.makedirs(extract_dir, exist_ok=True)
             else:
                 extract_dir = extract_base
 
             thread = threading.Thread(
                 target=process_extraction_task,
-                args=(task_id, archive, extract_dir, extraction_semaphore)
+                args=(task_id, archive, extract_dir, extraction_concurrency_limiter)
             )
             thread.daemon = True
             thread.start()
@@ -1733,12 +1907,14 @@ def reset_extraction():
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """获取配置信息"""
+    limiter_state = extraction_concurrency_limiter.state()
     return jsonify({
         'password_dict_size': len(PASSWORD_DICT),
         'password_cache_size': len(PASSWORD_SUCCESS_CACHE),
         'default_mount': DEFAULT_MOUNT_PATH,
         'version': APP_DISPLAY_VERSION,
-        'concurrent_count': extraction_settings['concurrent_count'],
+        'concurrent_count': limiter_state['limit'],
+        'active_extractions': limiter_state['active'],
         'supported_formats': list(SUPPORTED_ARCHIVE_EXTENSIONS),
         'multipart_formats': ['.part1.7z', '.part1.rar', '.001', '.002']
     })
@@ -1747,23 +1923,32 @@ def get_config():
 def update_settings():
     """获取或更新并发设置"""
     if request.method == 'GET':
+        limiter_state = extraction_concurrency_limiter.state()
         return jsonify({
-            'concurrent_count': extraction_settings['concurrent_count']
+            'concurrent_count': limiter_state['limit'],
+            'active_extractions': limiter_state['active']
         })
     else:  # POST
-        data = request.get_json()
-        concurrent_count = data.get('concurrent_count', 1)
-
-        # 验证并发数
-        if not isinstance(concurrent_count, int) or concurrent_count < 1 or concurrent_count > MAX_CONCURRENT_EXTRACTIONS:
+        data = request.get_json(silent=True) or {}
+        try:
+            concurrent_count = int(data.get('concurrent_count', 1))
+        except (TypeError, ValueError):
             return jsonify({'error': f'并发数必须在 1-{MAX_CONCURRENT_EXTRACTIONS} 之间'}), 400
 
-        extraction_settings['concurrent_count'] = concurrent_count
-        logger.info(f"并发数已更新为: {concurrent_count}")
+        # 验证并发数
+        if concurrent_count < 1 or concurrent_count > MAX_CONCURRENT_EXTRACTIONS:
+            return jsonify({'error': f'并发数必须在 1-{MAX_CONCURRENT_EXTRACTIONS} 之间'}), 400
+
+        with extraction_settings_lock:
+            extraction_settings['concurrent_count'] = concurrent_count
+            extraction_concurrency_limiter.set_limit(concurrent_count)
+            limiter_state = extraction_concurrency_limiter.state()
+        logger.info(f"并发数已实时更新为: {concurrent_count}")
         
         return jsonify({
             'success': True,
-            'concurrent_count': concurrent_count
+            'concurrent_count': limiter_state['limit'],
+            'active_extractions': limiter_state['active']
         })
 
 @app.route('/api/subdirs', methods=['POST'])
@@ -2010,7 +2195,7 @@ def download_logs():
 def delete_archives():
     """删除指定的压缩包文件"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({'error': '无效的请求数据'}), 400
 
@@ -2020,33 +2205,62 @@ def delete_archives():
 
         deleted_files = []
         failed_files = []
+        seen_targets = set()
+        all_exts = SUPPORTED_ARCHIVE_EXTENSIONS + MULTIPART_EXTENSIONS
 
         for file_path in files:
             try:
+                if not isinstance(file_path, str) or not file_path.strip():
+                    failed_files.append({'file': str(file_path), 'error': '无效的文件路径'})
+                    continue
+
+                file_path = file_path.strip()
                 # 安全检查：确保文件确实存在且是我们期望的类型
                 if not os.path.exists(file_path):
                     failed_files.append({'file': file_path, 'error': '文件不存在'})
                     continue
 
                 # 检查是否是压缩包
-                if not any(file_path.lower().endswith(ext) for ext in SUPPORTED_ARCHIVE_EXTENSIONS):
+                if not _is_archive_file(file_path, all_exts):
                     failed_files.append({'file': file_path, 'error': '不是有效的压缩包文件'})
                     continue
 
-                # 删除文件
-                os.remove(file_path)
-                deleted_files.append(file_path)
-                logger.info(f"已删除成功解压的压缩包: {file_path}")
+                for target_path in _get_archive_delete_targets(file_path):
+                    normalized_target = os.path.normpath(target_path)
+                    if normalized_target in seen_targets:
+                        continue
+                    seen_targets.add(normalized_target)
+
+                    if not os.path.exists(target_path):
+                        failed_files.append({'file': target_path, 'error': '文件不存在'})
+                        continue
+                    if not _is_archive_file(target_path, all_exts):
+                        failed_files.append({'file': target_path, 'error': '不是有效的压缩包文件'})
+                        continue
+
+                    os.remove(target_path)
+                    deleted_files.append(target_path)
+                    logger.info(f"已删除成功解压的压缩包: {target_path}")
             except Exception as e:
                 failed_files.append({'file': file_path, 'error': str(e)})
                 logger.error(f"删除文件失败 {file_path}: {e}")
 
+        deleted_count = len(deleted_files)
+        failed_count = len(failed_files)
+        if deleted_count and failed_count:
+            message = f'已删除 {deleted_count} 个文件，{failed_count} 个失败'
+        elif deleted_count:
+            message = f'已删除 {deleted_count} 个压缩包文件'
+        else:
+            message = f'未删除任何文件，{failed_count} 个失败'
+
         return jsonify({
-            'success': True,
+            'success': failed_count == 0 and deleted_count > 0,
+            'message': message,
             'deleted': deleted_files,
             'failed': failed_files,
-            'deleted_count': len(deleted_files),
-            'failed_count': len(failed_files)
+            'deleted_count': deleted_count,
+            'failed_count': failed_count
         })
     except Exception as e:
         logger.exception(f"删除压缩包API失败: {e}")

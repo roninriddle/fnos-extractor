@@ -1136,18 +1136,20 @@
                         <label style="font-size: 14px; color: #555; min-width: 150px;">
                             同时解压文件数:
                         </label>
-                        <input type="number" id="concurrentInput" min="1" max="32" value="1" 
+                        <input type="number" id="concurrentInput" min="1" max="32" value="1"
+                               oninput="scheduleConcurrentSettingsSave()" onchange="saveConcurrentSettings({ silent: true })"
                                style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                         <span style="font-size: 12px; color: #999;">(1-32)</span>
+                        <span id="concurrentStatus" style="font-size: 12px; color: #999;">已应用</span>
                     </div>
                     <p style="margin-top: 20px; font-size: 12px; color: #999;">
-                        💡 设置同时解压的文件数量。数值越大并发度越高，但会消耗更多系统资源。<br/>
+                        💡 设置同时解压的文件数量，修改后会立即应用到正在排队的任务。数值越大并发度越高，但会消耗更多系统资源。<br/>
                         推荐值: 单核 1-2 个, 4核 2-4 个, 8核+ 4-8 个
                     </p>
                 </div>
                 <div class="modal-footer">
                     <button class="btn-secondary" onclick="closeSettingsModal()">取消</button>
-                    <button class="btn-primary" onclick="saveConcurrentSettings()">💾 保存</button>
+                    <button class="btn-primary" onclick="applyConcurrentSettingsAndClose()">💾 保存</button>
                 </div>
             </div>
 
@@ -1317,6 +1319,8 @@
         let currentPath = '/vol1/1000/Temp';
         let pendingCompletion = null;  // 待显示的完成通知
         let originalTitle = document.title;
+        let concurrentSaveTimer = null;
+        let lastAppliedConcurrent = null;
         
         // 页面可见性检测
         document.addEventListener('visibilitychange', function() {
@@ -1582,7 +1586,7 @@
         }
         
         function showCompletionModal(completionData) {
-            const { summaryMsg, successFiles, successList, failList } = completionData;
+            const { summaryMsg, successFiles, successList, failList, autoDeleteSuccess } = completionData;
             
             // 构建摘要HTML
             let summaryHtml = '';
@@ -1598,14 +1602,20 @@
                     <div class="summary-list" style="color: #dc3545;">${failList.join('<br>')}</div>
                 </div>`;
             }
+            if (autoDeleteSuccess && successFiles.length > 0) {
+                summaryHtml += `<div class="summary-section">
+                    <div class="summary-title">🗑️ 已自动删除</div>
+                    <div class="summary-list">成功解压的压缩包已按设置自动删除。</div>
+                </div>`;
+            }
             
             document.getElementById('completionSummary').innerHTML = summaryHtml;
             
-            // 如果没有成功的文件，隐藏删除选项
-            if (successFiles.length === 0) {
+            // 如果没有成功文件或已经自动删除，隐藏手动删除选项
+            if (successFiles.length === 0 || autoDeleteSuccess) {
                 document.getElementById('deleteQuestion').style.display = 'none';
                 document.querySelector('#completionModal .modal-footer').innerHTML = 
-                    '<button class="btn-secondary" onclick="closeCompletionModal()">关闭</button>';
+                    '<button class="btn-secondary" onclick="skipDelete()">关闭</button>';
             } else {
                 document.getElementById('deleteQuestion').style.display = 'block';
                 document.querySelector('#completionModal .modal-footer').innerHTML = 
@@ -1729,15 +1739,36 @@
         }
 
         // ===== 并发设置 =====
-        async function saveConcurrentSettings() {
-            const concurrentCount = parseInt(document.getElementById('concurrentInput').value);
-            
+        function setConcurrentStatus(message, isError = false) {
+            const statusEl = document.getElementById('concurrentStatus');
+            if (!statusEl) return;
+            statusEl.textContent = message;
+            statusEl.style.color = isError ? '#dc3545' : '#28a745';
+        }
+
+        function scheduleConcurrentSettingsSave() {
+            clearTimeout(concurrentSaveTimer);
+            setConcurrentStatus('准备应用...', false);
+            concurrentSaveTimer = setTimeout(() => {
+                saveConcurrentSettings({ silent: true });
+            }, 350);
+        }
+
+        async function saveConcurrentSettings(options = {}) {
+            const { silent = false, closeOnSuccess = !silent } = options;
+            const concurrentInput = document.getElementById('concurrentInput');
+            const concurrentCount = parseInt(concurrentInput.value, 10);
+
             if (!concurrentCount || concurrentCount < 1 || concurrentCount > 32) {
-                alert('❌ 并发数必须在 1-32 之间');
-                return;
+                setConcurrentStatus('请输入 1-32', true);
+                if (!silent) {
+                    alert('❌ 并发数必须在 1-32 之间');
+                }
+                return false;
             }
-            
+
             try {
+                setConcurrentStatus('应用中...', false);
                 const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1745,14 +1776,41 @@
                 });
                 
                 const data = await response.json();
-                if (data.success) {
-                    alert(`✅ 并发数已设置为 ${data.concurrent_count}`);
-                    closeSettingsModal();
+                if (response.ok && data.success) {
+                    lastAppliedConcurrent = data.concurrent_count;
+                    const activeText = data.active_extractions ? `，当前运行 ${data.active_extractions}` : '';
+                    setConcurrentStatus(`已应用 ${data.concurrent_count}${activeText}`, false);
+                    if (!silent) {
+                        alert(`✅ 并发数已设置为 ${data.concurrent_count}`);
+                    }
+                    if (closeOnSuccess) {
+                        closeSettingsModal();
+                    }
+                    return true;
                 } else {
-                    alert('❌ 设置失败: ' + data.error);
+                    setConcurrentStatus('应用失败', true);
+                    if (!silent) {
+                        alert('❌ 设置失败: ' + (data.error || '未知错误'));
+                    }
+                    if (lastAppliedConcurrent) {
+                        concurrentInput.value = lastAppliedConcurrent;
+                    }
+                    return false;
                 }
             } catch (e) {
-                alert('设置失败: ' + e.message);
+                setConcurrentStatus('应用失败', true);
+                if (!silent) {
+                    alert('设置失败: ' + e.message);
+                }
+                return false;
+            }
+        }
+
+        async function applyConcurrentSettingsAndClose() {
+            clearTimeout(concurrentSaveTimer);
+            const saved = await saveConcurrentSettings({ silent: false, closeOnSuccess: false });
+            if (saved) {
+                closeSettingsModal();
             }
         }
 
@@ -1761,8 +1819,13 @@
             try {
                 const response = await fetch('/api/settings');
                 const data = await response.json();
-                document.getElementById('concurrentInput').value = data.concurrent_count || 1;
+                const concurrentCount = data.concurrent_count || 1;
+                lastAppliedConcurrent = concurrentCount;
+                document.getElementById('concurrentInput').value = concurrentCount;
+                const activeText = data.active_extractions ? `，当前运行 ${data.active_extractions}` : '';
+                setConcurrentStatus(`已应用 ${concurrentCount}${activeText}`, false);
             } catch (e) {
+                setConcurrentStatus('加载失败', true);
                 console.error('加载并发设置失败: ' + e.message);
             }
         }
@@ -1774,7 +1837,7 @@
             const detection7zTimeout = parseInt(document.getElementById('detection7zTimeoutInput').value);
             const detectionZipTimeout = parseInt(document.getElementById('detectionZipTimeoutInput').value);
             const detectionRarTimeout = parseInt(document.getElementById('detectionRarTimeoutInput').value);
-            
+
             // 验证输入
             if (!passwordTimeout || passwordTimeout < 1 || passwordTimeout > 300) {
                 alert('❌ 密码尝试超时必须在 1-300 秒之间');
@@ -1796,7 +1859,7 @@
                 alert('❌ RAR检测超时必须在 1-60 秒之间');
                 return;
             }
-            
+
             try {
                 const response = await fetch('/api/settings/timeouts', {
                     method: 'POST',
@@ -1809,16 +1872,16 @@
                         detection_rar_timeout: detectionRarTimeout
                     })
                 });
-                
+
                 const data = await response.json();
                 if (data.success) {
                     alert('✅ 超时设置已保存');
                     closeSettingsModal();
                 } else {
-                    alert('❌ 设置失败: ' + data.error);
+                    alert('❌ 保存失败: ' + data.error);
                 }
             } catch (e) {
-                alert('设置失败: ' + e.message);
+                alert('保存失败: ' + e.message);
             }
         }
 
@@ -2334,7 +2397,8 @@
                 summaryMsg,
                 successFiles,
                 successList,
-                failList
+                failList,
+                autoDeleteSuccess: Boolean(currentTask && currentTask.options && currentTask.options.auto_delete_success)
             };
             
             // 检查页面是否可见
@@ -2367,7 +2431,20 @@
                     body: JSON.stringify({ files })
                 });
                 const data = await response.json();
-                alert(data.message || '✅ 已删除压缩包');
+                if (!response.ok) {
+                    throw new Error(data.error || '删除请求失败');
+                }
+
+                if (data.success) {
+                    alert(data.message || '✅ 已删除压缩包');
+                } else {
+                    const failedPreview = (data.failed || [])
+                        .slice(0, 5)
+                        .map(item => `${item.file.split('/').pop()}: ${item.error}`)
+                        .join('\n');
+                    const detail = failedPreview ? `\n${failedPreview}` : '';
+                    alert(`❌ ${data.message || '删除失败'}${detail}`);
+                }
             } catch (e) {
                 alert('❌ 删除失败: ' + e.message);
             } finally {
