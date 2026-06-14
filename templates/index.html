@@ -1413,6 +1413,10 @@
                 function toggleExtractPath() {
                     const group = document.getElementById('extractPathGroup');
                     const hint = document.getElementById('extractPathHint');
+                    const checkedMode = document.querySelector('input[name="extractMode"]:checked');
+                    if (checkedMode) {
+                        writeLocalSetting(STORAGE_KEYS.extractMode, checkedMode.value);
+                    }
                     if (document.getElementById('modeSpecified').checked) {
                         group.style.display = '';
                         hint.textContent = '指定目录可自定义路径';
@@ -1425,6 +1429,7 @@
                 }
                 // 页面加载时初始化一次
                 document.addEventListener('DOMContentLoaded', () => {
+                    restorePathSettings();
                     toggleExtractPath();
                     toggleRenameFields();
                     updateScanModeHint();
@@ -1442,10 +1447,20 @@
         let currentScanRoots = ['{{ default_mount_path }}'];
         let selectedDirectories = new Set();
         let directoryTreeRoot = '';
+        let extractPathManuallyEdited = false;
         let pendingCompletion = null;  // 待显示的完成通知
         let originalTitle = document.title;
         let concurrentSaveTimer = null;
         let lastAppliedConcurrent = null;
+
+        const DEFAULT_MOUNT_PATH = '{{ default_mount_path }}';
+        const DEFAULT_EXTRACT_PATH = '{{ default_extract_path }}';
+        const STORAGE_KEYS = {
+            scanPath: 'fnos.scanPath',
+            extractPath: 'fnos.extractPath',
+            extractPathManual: 'fnos.extractPathManual',
+            extractMode: 'fnos.extractMode'
+        };
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -1454,6 +1469,126 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        function readLocalSetting(key) {
+            try {
+                return localStorage.getItem(key);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function writeLocalSetting(key, value) {
+            try {
+                localStorage.setItem(key, value);
+            } catch (e) {
+                // 浏览器禁用本地存储时不影响主流程
+            }
+        }
+
+        function normalizeDirPath(path) {
+            const value = String(path || '').trim();
+            if (!value || value === '/') return value || '/';
+            return value.replace(/\/+$/, '');
+        }
+
+        function joinPath(base, child) {
+            const normalizedBase = normalizeDirPath(base);
+            if (!normalizedBase || normalizedBase === '/') return `/${child}`;
+            return `${normalizedBase}/${child}`;
+        }
+
+        function suggestedExtractPath(scanPath) {
+            return joinPath(scanPath || DEFAULT_MOUNT_PATH, 'extracted');
+        }
+
+        function persistScanPath(path) {
+            if (path) {
+                writeLocalSetting(STORAGE_KEYS.scanPath, path);
+            }
+        }
+
+        function persistExtractPath(path) {
+            if (path) {
+                writeLocalSetting(STORAGE_KEYS.extractPath, path);
+            }
+            writeLocalSetting(STORAGE_KEYS.extractPathManual, extractPathManuallyEdited ? '1' : '0');
+        }
+
+        function syncExtractPathToScanPath(force = false) {
+            const extractInput = document.getElementById('extractPath');
+            if (!extractInput) return;
+            if (!force && extractPathManuallyEdited) return;
+
+            const scanPath = document.getElementById('scanPath').value.trim() || DEFAULT_MOUNT_PATH;
+            extractPathManuallyEdited = false;
+            extractInput.value = suggestedExtractPath(scanPath);
+            persistExtractPath(extractInput.value);
+        }
+
+        function applyScanPath(path, options = {}) {
+            const normalized = normalizeDirPath(path || DEFAULT_MOUNT_PATH);
+            const { persist = true, syncExtract = true, reloadTree = false } = options;
+            currentPath = normalized;
+            document.getElementById('scanPath').value = normalized;
+            const currentDirText = document.getElementById('currentDirText');
+            if (currentDirText) {
+                currentDirText.textContent = normalized;
+            }
+            if (persist) {
+                persistScanPath(normalized);
+            }
+            if (syncExtract) {
+                syncExtractPathToScanPath(false);
+            }
+            if (reloadTree && document.getElementById('directoryTreePanel').style.display === 'block') {
+                directoryTreeRoot = '';
+                reloadDirectoryTree();
+            }
+        }
+
+        function restorePathSettings() {
+            const storedScanPath = readLocalSetting(STORAGE_KEYS.scanPath);
+            const storedExtractPath = readLocalSetting(STORAGE_KEYS.extractPath);
+            extractPathManuallyEdited = readLocalSetting(STORAGE_KEYS.extractPathManual) === '1';
+
+            applyScanPath(storedScanPath || DEFAULT_MOUNT_PATH, { persist: false, syncExtract: false });
+
+            const extractInput = document.getElementById('extractPath');
+            if (extractInput) {
+                if (storedExtractPath && extractPathManuallyEdited) {
+                    extractInput.value = storedExtractPath;
+                } else {
+                    extractPathManuallyEdited = false;
+                    extractInput.value = suggestedExtractPath(currentPath);
+                    persistExtractPath(extractInput.value);
+                }
+                extractInput.addEventListener('input', () => {
+                    extractPathManuallyEdited = true;
+                    persistExtractPath(extractInput.value.trim());
+                });
+                extractInput.addEventListener('change', () => {
+                    extractPathManuallyEdited = true;
+                    persistExtractPath(extractInput.value.trim());
+                });
+            }
+
+            const storedMode = readLocalSetting(STORAGE_KEYS.extractMode);
+            if (storedMode) {
+                const modeInput = document.querySelector(`input[name="extractMode"][value="${storedMode}"]`);
+                if (modeInput) {
+                    modeInput.checked = true;
+                }
+            }
+
+            const scanInput = document.getElementById('scanPath');
+            scanInput.addEventListener('input', () => {
+                applyScanPath(scanInput.value, { persist: true, syncExtract: true });
+            });
+            scanInput.addEventListener('change', () => {
+                applyScanPath(scanInput.value, { persist: true, syncExtract: true, reloadTree: true });
+            });
         }
         
         // 页面可见性检测
@@ -1597,8 +1732,7 @@
             const label = document.createElement('div');
             label.className = 'directory-node-label';
             label.onclick = () => {
-                document.getElementById('scanPath').value = node.path;
-                currentPath = node.path;
+                applyScanPath(node.path, { persist: true, syncExtract: true });
             };
 
             const name = document.createElement('div');
@@ -2006,9 +2140,7 @@
                 alert('请输入有效的路径');
                 return;
             }
-            currentPath = path.trim();
-            document.getElementById('scanPath').value = currentPath;
-            document.getElementById('currentDirText').textContent = currentPath;
+            applyScanPath(path.trim(), { persist: true, syncExtract: true, reloadTree: true });
             alert('已切换到: ' + currentPath);
         }
 
@@ -2261,7 +2393,11 @@
                 return;
             }
 
-            currentPath = scanPaths && scanPaths.length === 1 ? scanPaths[0] : (path || scanPaths[0]);
+            const activePathForUi = scanPaths && scanPaths.length === 1 ? scanPaths[0] : (path || scanPaths[0]);
+            if (activePathForUi) {
+                applyScanPath(activePathForUi, { persist: true, syncExtract: true });
+            }
+            currentPath = activePathForUi;
             currentScanMode = getScanMode();
             document.getElementById('emptyState').style.display = 'none';
             
@@ -2355,8 +2491,7 @@
                 const item = document.createElement('div');
                 item.className = 'subdir-item';
                 item.onclick = () => {
-                    document.getElementById('scanPath').value = entry.path;
-                    currentPath = entry.path;
+                    applyScanPath(entry.path, { persist: true, syncExtract: true });
                     scanDirectory();
                 };
 
