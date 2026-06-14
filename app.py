@@ -2,7 +2,7 @@
 """
 FNOS 批量文件处理工具
 支持递归扫描、密码检测和 Web 界面
-版本: 1.3.25
+版本: 1.3.26
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
@@ -27,7 +27,7 @@ import platform
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.25'
+APP_VERSION = '1.3.26'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -1202,6 +1202,128 @@ def _iter_files(root_dir: str, recursive: bool = True):
             logger.debug(f"扫描目录失败: {current_dir}, {e}")
             continue
 
+def _directory_has_child_directories(path: str) -> bool:
+    """判断目录下是否还有可见子目录，用于前端目录树懒加载。"""
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        return True
+                except (OSError, PermissionError):
+                    continue
+    except (OSError, PermissionError):
+        return False
+    return False
+
+def _list_child_directories(root_dir: str, limit: int = 500) -> Tuple[List[Dict[str, object]], bool]:
+    """列出直接子目录。返回 (目录列表, 是否被数量限制截断)。"""
+    directories = []
+    truncated = False
+    try:
+        with os.scandir(root_dir) as it:
+            for entry in it:
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    readable = os.access(entry.path, os.R_OK | os.X_OK)
+                    directories.append({
+                        'name': entry.name,
+                        'path': entry.path,
+                        'readable': readable,
+                        'has_children': readable and _directory_has_child_directories(entry.path)
+                    })
+                    if len(directories) >= limit:
+                        truncated = True
+                        break
+                except (OSError, PermissionError):
+                    continue
+    except (OSError, PermissionError) as e:
+        logger.debug(f"列出子目录失败: {root_dir}, {e}")
+
+    directories.sort(key=lambda item: str(item['name']).lower())
+    return directories, truncated
+
+def _normalize_scan_roots(raw_paths, fallback_path: str, recursive: bool) -> List[str]:
+    """清洗扫描根目录；递归扫描时去掉被父目录覆盖的子目录。"""
+    if isinstance(raw_paths, list):
+        candidate_paths = raw_paths
+    elif raw_paths:
+        candidate_paths = [raw_paths]
+    else:
+        candidate_paths = [fallback_path]
+
+    normalized = []
+    seen = set()
+    for item in candidate_paths:
+        if not isinstance(item, str):
+            continue
+        path = item.strip()
+        if not path:
+            continue
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            continue
+        seen.add(abs_path)
+        normalized.append((path, abs_path))
+
+    if not normalized:
+        return [fallback_path]
+
+    if not recursive:
+        return [path for path, _ in normalized]
+
+    selected = []
+    selected_abs = []
+    for path, abs_path in sorted(normalized, key=lambda item: len(item[1])):
+        covered = False
+        for parent_abs in selected_abs:
+            try:
+                if os.path.commonpath([abs_path, parent_abs]) == parent_abs:
+                    covered = True
+                    break
+            except ValueError:
+                continue
+        if not covered:
+            selected.append(path)
+            selected_abs.append(abs_path)
+
+    return selected
+
+def _validate_scan_root(root_dir: str) -> Optional[Tuple[str, int]]:
+    """校验扫描目录。返回 (错误消息, HTTP 状态码) 或 None。"""
+    root_path = Path(root_dir)
+    if not root_path.exists():
+        logger.error(f"目录不存在: {root_dir}")
+        return f'目录不存在: {root_dir}', 400
+
+    if not root_path.is_dir():
+        logger.error(f"路径不是目录: {root_dir}")
+        return f'路径不是目录: {root_dir}', 400
+
+    if not os.access(root_dir, os.R_OK):
+        logger.error(f"没有目录读取权限: {root_dir}")
+        return f'没有目录读取权限: {root_dir}', 403
+
+    return None
+
+def _merge_subdirectory_stats(scan_roots: List[str], scan_mode: str) -> Dict[str, object]:
+    """合并一个或多个扫描根目录的命中子目录统计。"""
+    merged = {}
+    multi_root = len(scan_roots) > 1
+
+    for root_dir in scan_roots:
+        for name, count in scan_subdirectories(root_dir, scan_mode=scan_mode).items():
+            path = str(Path(root_dir) / name)
+            key = path if multi_root else name
+            merged[key] = {
+                'name': name,
+                'path': path,
+                'count': count
+            }
+
+    return merged
+
 def _is_archive_file(file_name: str, all_exts: Tuple[str, ...]) -> bool:
     name = file_name.lower()
     return name.endswith(all_exts)
@@ -1669,48 +1791,85 @@ def index():
         default_extract_path=os.path.join(DEFAULT_MOUNT_PATH, 'extracted')
     )
 
+@app.route('/api/directories', methods=['POST'])
+def list_directories():
+    """列出目录树的一层子目录。"""
+    data = request.get_json() or {}
+    root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    try:
+        limit = int(data.get('limit', 500))
+    except (TypeError, ValueError):
+        limit = 500
+    limit = max(1, min(limit, 1000))
+
+    validation_error = _validate_scan_root(root_dir)
+    if validation_error:
+        message, status_code = validation_error
+        return jsonify({'error': message}), status_code
+
+    directories, truncated = _list_child_directories(root_dir, limit=limit)
+    return jsonify({
+        'path': root_dir,
+        'name': Path(root_dir).name or root_dir,
+        'parent': str(Path(root_dir).parent) if Path(root_dir).parent != Path(root_dir) else None,
+        'directories': directories,
+        'total': len(directories),
+        'truncated': truncated
+    })
+
 @app.route('/api/scan', methods=['POST'])
 def scan_directory():
     """扫描目录"""
     data = request.get_json() or {}
     root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    selected_paths = data.get('paths')
     include_subdirs = data.get('include_subdirs', True)
     scan_mode = data.get('scan_mode', 'archives')
 
     if scan_mode not in {'archives', 'all'}:
         return jsonify({'error': 'scan_mode 仅支持 archives 或 all'}), 400
-    
-    logger.info(f"开始扫描目录: {root_dir} (包含子目录: {include_subdirs}, 模式: {scan_mode})")
-    
-    # 验证目录存在
-    root_path = Path(root_dir)
-    if not root_path.exists():
-        logger.error(f"目录不存在: {root_dir}")
-        return jsonify({'error': f'目录不存在: {root_dir}'}), 400
-    
-    if not root_path.is_dir():
-        logger.error(f"路径不是目录: {root_dir}")
-        return jsonify({'error': f'路径不是目录: {root_dir}'}), 400
-    
-    # 检查目录的读取权限
-    if not os.access(root_dir, os.R_OK):
-        logger.error(f"没有目录读取权限: {root_dir}")
-        return jsonify({'error': f'没有目录读取权限: {root_dir}'}), 403
+
+    scan_roots = _normalize_scan_roots(selected_paths, root_dir, include_subdirs)
+    logger.info(
+        f"开始扫描目录: {scan_roots} (包含子目录: {include_subdirs}, 模式: {scan_mode})"
+    )
+
+    for scan_root in scan_roots:
+        validation_error = _validate_scan_root(scan_root)
+        if validation_error:
+            message, status_code = validation_error
+            return jsonify({'error': message}), status_code
     
     try:
+        scanned_files = []
+        seen_files = set()
+        scanner = find_all_files if scan_mode == 'all' else find_all_archives
+        scan_label = '文件' if scan_mode == 'all' else '压缩包'
+        for scan_root in scan_roots:
+            for file_path in scanner(scan_root, recursive=include_subdirs):
+                if file_path in seen_files:
+                    continue
+                seen_files.add(file_path)
+                scanned_files.append(file_path)
+
+        scanned_files = sorted(scanned_files)
         if scan_mode == 'all':
-            scanned_files = find_all_files(root_dir, recursive=include_subdirs)
             logger.info(f"扫描完成，发现 {len(scanned_files)} 个文件 (子目录: {include_subdirs})")
         else:
-            scanned_files = find_all_archives(root_dir, recursive=include_subdirs)
             logger.info(f"扫描完成，发现 {len(scanned_files)} 个压缩包 (子目录: {include_subdirs})")
+
+        with scan_status_lock:
+            scan_status['scanning'] = False
+            scan_status['found_count'] = len(scanned_files)
+            scan_status['current_path'] = ', '.join(scan_roots[:3])
+            scan_status['message'] = f'扫描完成，共发现 {len(scanned_files)} 个{scan_label}'
     except Exception as e:
         logger.error(f"扫描压缩包时出错: {e}")
         return jsonify({'error': f'扫描文件时出错: {str(e)}'}), 500
     
     try:
         if include_subdirs:
-            subdir_stats = scan_subdirectories(root_dir, scan_mode=scan_mode)
+            subdir_stats = _merge_subdirectory_stats(scan_roots, scan_mode=scan_mode)
         else:
             subdir_stats = {}
     except Exception as e:
@@ -1749,6 +1908,7 @@ def scan_directory():
             'single_count': len(result),
             'archive_count': archive_count,
             'scan_mode': scan_mode,
+            'scan_roots': scan_roots,
             'subdirs_with_archives': subdir_stats if include_subdirs else {},
             'subdirs_count': len(subdir_stats) if include_subdirs else 0
         })
@@ -1838,6 +1998,7 @@ def scan_directory():
         'single_count': len(single_result),
         'archive_count': len(result),
         'scan_mode': scan_mode,
+        'scan_roots': scan_roots,
         'subdirs_with_archives': subdir_stats if include_subdirs else {},
         'subdirs_count': len(subdir_stats) if include_subdirs else 0
     })

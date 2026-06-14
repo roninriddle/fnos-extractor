@@ -666,6 +666,109 @@
             border-bottom: none;
         }
 
+        .directory-selector {
+            margin-top: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px;
+            background: #fafafa;
+        }
+
+        .directory-selector-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .directory-selected-summary {
+            color: #666;
+            font-size: 12px;
+            margin-left: auto;
+        }
+
+        .directory-tree-panel {
+            display: none;
+            margin-top: 10px;
+        }
+
+        .directory-tree-status {
+            color: #777;
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+
+        .directory-tree {
+            max-height: 340px;
+            overflow: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background: white;
+            padding: 6px;
+        }
+
+        .directory-node-row {
+            display: grid;
+            grid-template-columns: 26px 24px minmax(0, 1fr);
+            align-items: center;
+            gap: 6px;
+            min-height: 34px;
+            padding: 4px 6px;
+            border-radius: 5px;
+        }
+
+        .directory-node-row:hover {
+            background: #f6f7fb;
+        }
+
+        .directory-toggle {
+            width: 24px;
+            height: 24px;
+            border: 1px solid #e0e0e0;
+            background: #fff;
+            color: #555;
+            border-radius: 4px;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .directory-toggle-placeholder {
+            width: 24px;
+            height: 24px;
+        }
+
+        .directory-node-label {
+            min-width: 0;
+            cursor: pointer;
+        }
+
+        .directory-node-name {
+            color: #333;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .directory-node-path {
+            color: #999;
+            font-size: 11px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .directory-node-children {
+            display: none;
+        }
+
+        .directory-node-message {
+            color: #999;
+            font-size: 12px;
+            padding: 6px 0 6px 62px;
+        }
+
         .badge-count {
             background: #667eea;
             color: white;
@@ -873,6 +976,19 @@
                     </label>
                 </div>
                 <small id="scanModeHint" style="color: #999;">将扫描该目录下所有 .7z, .rar, .zip 等压缩文件</small>
+                <div class="directory-selector">
+                    <div class="directory-selector-toolbar">
+                        <button class="btn-secondary" type="button" onclick="toggleDirectorySelector()">📁 目录选择</button>
+                        <button class="btn-secondary" type="button" onclick="reloadDirectoryTree()">刷新目录树</button>
+                        <button class="btn-primary" type="button" onclick="scanSelectedDirectories()">扫描选中目录</button>
+                        <button class="btn-secondary" type="button" onclick="clearDirectorySelection()">清空选择</button>
+                        <span class="directory-selected-summary" id="directorySelectedSummary">未选择目录</span>
+                    </div>
+                    <div class="directory-tree-panel" id="directoryTreePanel">
+                        <div class="directory-tree-status" id="directoryTreeStatus">目录树未加载</div>
+                        <div class="directory-tree" id="directoryTree"></div>
+                    </div>
+                </div>
             </div>
 
             <!-- 统计部分 -->
@@ -1312,6 +1428,7 @@
                     toggleExtractPath();
                     toggleRenameFields();
                     updateScanModeHint();
+                    updateDirectorySelectedSummary();
                     document.querySelectorAll('input[name="scanMode"]').forEach(el => {
                         el.addEventListener('change', updateScanModeHint);
                     });
@@ -1322,6 +1439,9 @@
         let scannedExtensions = [];
         let currentTask = null;
         let currentPath = '{{ default_mount_path }}';
+        let currentScanRoots = ['{{ default_mount_path }}'];
+        let selectedDirectories = new Set();
+        let directoryTreeRoot = '';
         let pendingCompletion = null;  // 待显示的完成通知
         let originalTitle = document.title;
         let concurrentSaveTimer = null;
@@ -1364,6 +1484,219 @@
             } else {
                 hint.textContent = '将扫描该目录下所有 .7z, .rar, .zip 等压缩文件';
             }
+        }
+
+        function getScanRootPath() {
+            return document.getElementById('scanPath').value.trim();
+        }
+
+        function getDirectoryDisplayName(path) {
+            const parts = String(path || '').split('/').filter(Boolean);
+            return parts.length ? parts[parts.length - 1] : (path || '/');
+        }
+
+        function updateDirectorySelectedSummary() {
+            const summary = document.getElementById('directorySelectedSummary');
+            const count = selectedDirectories.size;
+            if (count === 0) {
+                summary.textContent = '未选择目录';
+            } else if (count === 1) {
+                summary.textContent = `已选择 1 个目录：${getDirectoryDisplayName([...selectedDirectories][0])}`;
+            } else {
+                summary.textContent = `已选择 ${count} 个目录`;
+            }
+        }
+
+        function setDirectoryTreeStatus(message) {
+            const status = document.getElementById('directoryTreeStatus');
+            if (status) status.textContent = message;
+        }
+
+        function toggleDirectorySelector() {
+            const panel = document.getElementById('directoryTreePanel');
+            const shouldShow = panel.style.display !== 'block';
+            panel.style.display = shouldShow ? 'block' : 'none';
+            if (shouldShow && !directoryTreeRoot) {
+                reloadDirectoryTree();
+            }
+        }
+
+        async function reloadDirectoryTree() {
+            const rootPath = getScanRootPath();
+            if (!rootPath) {
+                alert('请输入目录路径');
+                return;
+            }
+
+            document.getElementById('directoryTreePanel').style.display = 'block';
+            directoryTreeRoot = rootPath;
+            setDirectoryTreeStatus('正在加载目录树...');
+
+            const tree = document.getElementById('directoryTree');
+            tree.innerHTML = '';
+            const rootNode = createDirectoryNode({
+                name: getDirectoryDisplayName(rootPath),
+                path: rootPath,
+                readable: true,
+                has_children: true
+            }, 0);
+            tree.appendChild(rootNode);
+            await loadDirectoryChildren(rootNode, rootPath, true);
+            setDirectoryTreeStatus(`当前根目录：${rootPath}`);
+        }
+
+        async function requestDirectoryChildren(path) {
+            const response = await fetch('/api/directories', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `服务端返回 HTTP ${response.status}`);
+            }
+            return data;
+        }
+
+        function createDirectoryNode(node, level) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'directory-node';
+            wrapper.dataset.path = node.path;
+            wrapper.dataset.loaded = 'false';
+            wrapper.dataset.expanded = 'false';
+            wrapper.dataset.level = String(level);
+
+            const row = document.createElement('div');
+            row.className = 'directory-node-row';
+            row.style.paddingLeft = `${Math.min(level * 18, 180)}px`;
+
+            const toggleCell = document.createElement(node.has_children ? 'button' : 'span');
+            if (node.has_children) {
+                toggleCell.type = 'button';
+                toggleCell.className = 'directory-toggle';
+                toggleCell.textContent = '›';
+                toggleCell.onclick = () => toggleDirectoryNode(wrapper, node.path);
+            } else {
+                toggleCell.className = 'directory-toggle-placeholder';
+            }
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'directory-checkbox';
+            checkbox.checked = selectedDirectories.has(node.path);
+            checkbox.disabled = node.readable === false;
+            checkbox.onchange = () => {
+                if (checkbox.checked) {
+                    selectedDirectories.add(node.path);
+                } else {
+                    selectedDirectories.delete(node.path);
+                }
+                updateDirectorySelectedSummary();
+            };
+
+            const label = document.createElement('div');
+            label.className = 'directory-node-label';
+            label.onclick = () => {
+                document.getElementById('scanPath').value = node.path;
+                currentPath = node.path;
+            };
+
+            const name = document.createElement('div');
+            name.className = 'directory-node-name';
+            name.textContent = node.readable === false ? `🔒 ${node.name}` : `📁 ${node.name}`;
+
+            const path = document.createElement('div');
+            path.className = 'directory-node-path';
+            path.textContent = node.path;
+
+            label.appendChild(name);
+            label.appendChild(path);
+            row.appendChild(toggleCell);
+            row.appendChild(checkbox);
+            row.appendChild(label);
+
+            const children = document.createElement('div');
+            children.className = 'directory-node-children';
+
+            wrapper.appendChild(row);
+            wrapper.appendChild(children);
+            return wrapper;
+        }
+
+        async function toggleDirectoryNode(wrapper, path) {
+            const expanded = wrapper.dataset.expanded === 'true';
+            const children = wrapper.querySelector(':scope > .directory-node-children');
+            const toggle = wrapper.querySelector(':scope > .directory-node-row > .directory-toggle');
+            if (expanded) {
+                wrapper.dataset.expanded = 'false';
+                children.style.display = 'none';
+                if (toggle) toggle.textContent = '›';
+                return;
+            }
+
+            await loadDirectoryChildren(wrapper, path, false);
+            wrapper.dataset.expanded = 'true';
+            children.style.display = 'block';
+            if (toggle) toggle.textContent = '⌄';
+        }
+
+        async function loadDirectoryChildren(wrapper, path, expandAfterLoad) {
+            const children = wrapper.querySelector(':scope > .directory-node-children');
+            const toggle = wrapper.querySelector(':scope > .directory-node-row > .directory-toggle');
+            if (wrapper.dataset.loaded === 'true') {
+                if (expandAfterLoad) {
+                    wrapper.dataset.expanded = 'true';
+                    children.style.display = 'block';
+                    if (toggle) toggle.textContent = '⌄';
+                }
+                return;
+            }
+
+            children.innerHTML = '<div class="directory-node-message">正在加载...</div>';
+            children.style.display = 'block';
+            try {
+                const data = await requestDirectoryChildren(path);
+                children.innerHTML = '';
+                if (!data.directories.length) {
+                    children.innerHTML = '<div class="directory-node-message">没有子目录</div>';
+                } else {
+                    data.directories.forEach(child => {
+                        children.appendChild(createDirectoryNode(child, Number(wrapper.dataset.level) + 1));
+                    });
+                    if (data.truncated) {
+                        const message = document.createElement('div');
+                        message.className = 'directory-node-message';
+                        message.textContent = '子目录过多，已显示前 1000 个';
+                        children.appendChild(message);
+                    }
+                }
+                wrapper.dataset.loaded = 'true';
+                if (expandAfterLoad) {
+                    wrapper.dataset.expanded = 'true';
+                    children.style.display = 'block';
+                    if (toggle) toggle.textContent = '⌄';
+                }
+            } catch (e) {
+                children.innerHTML = `<div class="directory-node-message">加载失败：${escapeHtml(e.message)}</div>`;
+                setDirectoryTreeStatus('目录树加载失败: ' + e.message);
+            }
+        }
+
+        function clearDirectorySelection() {
+            selectedDirectories.clear();
+            document.querySelectorAll('.directory-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            updateDirectorySelectedSummary();
+        }
+
+        async function scanSelectedDirectories() {
+            const paths = [...selectedDirectories];
+            if (paths.length === 0) {
+                alert('请先在目录树中选择至少一个目录');
+                return;
+            }
+            await scanDirectory(paths);
         }
 
         function getFileExtension(fileName) {
@@ -1920,21 +2253,23 @@
             }
         }
 
-        async function scanDirectory() {
+        async function scanDirectory(selectedPaths = null) {
             const path = document.getElementById('scanPath').value.trim();
-            if (!path) {
+            const scanPaths = Array.isArray(selectedPaths) && selectedPaths.length > 0 ? selectedPaths : null;
+            if (!path && !scanPaths) {
                 alert('请输入目录路径');
                 return;
             }
 
-            currentPath = path;
+            currentPath = scanPaths && scanPaths.length === 1 ? scanPaths[0] : (path || scanPaths[0]);
             currentScanMode = getScanMode();
             document.getElementById('emptyState').style.display = 'none';
             
             // 显示扫描中状态
             document.getElementById('listSection').style.display = 'block';
             document.getElementById('workflowSection').style.display = 'block';
-            document.getElementById('archiveList').innerHTML = '<div class="empty-state"><p>🔄 正在扫描中...<br/><span id="scanProgress" style="font-size: 13px; color: #999;">准备扫描</span></p></div>';
+            const scanTargetText = scanPaths ? `准备扫描 ${scanPaths.length} 个目录` : '准备扫描';
+            document.getElementById('archiveList').innerHTML = `<div class="empty-state"><p>🔄 正在扫描中...<br/><span id="scanProgress" style="font-size: 13px; color: #999;">${scanTargetText}</span></p></div>`;
             document.getElementById('statusGrid').style.display = 'grid';
             document.getElementById('totalCount').textContent = '...';
             document.getElementById('encryptedCount').textContent = '...';
@@ -1961,10 +2296,14 @@
 
             try {
                 const include_subdirs = document.getElementById('includeSubdirs').checked;
+                const requestBody = { path, include_subdirs, scan_mode: currentScanMode };
+                if (scanPaths) {
+                    requestBody.paths = scanPaths;
+                }
                 const response = await fetch('/api/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path, include_subdirs, scan_mode: currentScanMode })
+                    body: JSON.stringify(requestBody)
                 });
 
                 // 停止进度轮询
@@ -1979,6 +2318,7 @@
 
                 archives = data.archives;
                 currentScanMode = data.scan_mode || currentScanMode;
+                currentScanRoots = Array.isArray(data.scan_roots) && data.scan_roots.length > 0 ? data.scan_roots : [currentPath];
                 scannedExtensions = collectExtensions(archives);
                 renderArchiveList();
                 renderExtensionPicker();
@@ -2005,14 +2345,32 @@
         }
 
         function renderSubdirectories(subdirs) {
-            const html = Object.entries(subdirs).map(([name, count]) => `
-                <div class="subdir-item" onclick="document.getElementById('scanPath').value = currentPath + '/' + '${name}'; scanDirectory();">
-                    <span>📁 ${name}</span>
-                    <span class="badge-count">${count}</span>
-                </div>
-            `).join('');
-            
-            document.getElementById('subdirList').innerHTML = html;
+            const list = document.getElementById('subdirList');
+            list.innerHTML = '';
+
+            Object.entries(subdirs || {}).forEach(([key, value]) => {
+                const entry = typeof value === 'object' && value !== null
+                    ? value
+                    : { name: key, path: `${currentPath}/${key}`, count: value };
+                const item = document.createElement('div');
+                item.className = 'subdir-item';
+                item.onclick = () => {
+                    document.getElementById('scanPath').value = entry.path;
+                    currentPath = entry.path;
+                    scanDirectory();
+                };
+
+                const name = document.createElement('span');
+                name.textContent = `📁 ${entry.name}`;
+
+                const badge = document.createElement('span');
+                badge.className = 'badge-count';
+                badge.textContent = entry.count;
+
+                item.appendChild(name);
+                item.appendChild(badge);
+                list.appendChild(item);
+            });
         }
 
         function renderArchiveList() {
