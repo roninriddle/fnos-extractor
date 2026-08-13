@@ -98,6 +98,30 @@
             color: #94a3b8;
         }
 
+        .donation-card {
+            max-width: 360px;
+            margin: 0 auto 20px;
+            padding: 18px;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        }
+
+        .donation-title {
+            margin-bottom: 12px;
+            color: #334155;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .donation-image {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+        }
+
         .section {
             margin-bottom: 30px;
         }
@@ -1173,6 +1197,10 @@
         </div>
 
         <div class="page-footer">
+            <div class="donation-card">
+                <div class="donation-title">如果这个工具对你有帮助，欢迎请我喝一杯 ☕</div>
+                <img class="donation-image" src="{{ url_for('static', filename='images/donation.jpg') }}" alt="Ronin 的赞赏码" loading="lazy">
+            </div>
             <a class="footer-link" href="https://github.com/roninriddle/fnos-extractor" target="_blank" rel="noopener noreferrer">
                 🔗 前往 GitHub 检查更新
             </a>
@@ -1458,6 +1486,7 @@
 
         const DEFAULT_MOUNT_PATH = '{{ default_mount_path }}';
         const DEFAULT_EXTRACT_PATH = '{{ default_extract_path }}';
+
         const STORAGE_KEYS = {
             scanPath: 'fnos.scanPath',
             extractPath: 'fnos.extractPath',
@@ -2152,7 +2181,8 @@
             try {
                 const response = await fetch('/api/passwords');
                 const data = await response.json();
-                document.getElementById('passwordsTextarea').value = data.passwords.join('\n');
+                document.getElementById('passwordsTextarea').value = '';
+                document.getElementById('passwordsTextarea').placeholder = '出于安全原因不回显现有密码。输入完整的新词典后保存。';
                 document.getElementById('pwdCountText').textContent = data.count;
             } catch (e) {
                 alert('加载密码本失败: ' + e.message);
@@ -2195,19 +2225,8 @@
                     return;
                 }
                 
-                const cacheHtml = Object.entries(data.cache).map(([file, pwd]) => `
-                    <div class="cache-item">
-                        <span>
-                            <strong>${file.split('/').pop()}</strong><br>
-                            <span style="color: #999; font-size: 10px;">${file}</span>
-                        </span>
-                        <span style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
-                            ${pwd}
-                        </span>
-                    </div>
-                `).join('');
-                
-                document.getElementById('cacheList').innerHTML = cacheHtml;
+                document.getElementById('cacheList').innerHTML =
+                    `<p style="text-align: center; color: #666; padding: 20px;">已安全缓存 ${data.count} 个密码，明文不在页面展示。</p>`;
             } catch (e) {
                 alert('加载缓存失败: ' + e.message);
             }

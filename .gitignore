@@ -17,3 +17,7 @@ build/
 *.egg-info/
 extracted/
 temp/
+.env
+data/
+passwords.txt
+password_cache.json

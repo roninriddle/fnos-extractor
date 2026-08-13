@@ -1,4 +1,4 @@
-# FNOS 批量文件处理工具 v1.3.28
+# FNOS 批量文件处理工具 v1.3.29
 
 🚀 生产级批量文件处理工具 - 支持 Web UI、密码破解、多卷文件、智能解压与批量重命名
 
@@ -60,9 +60,16 @@
 docker pull roninriddle/fnos-extractor:latest
 docker run -d \
   --name fnos-extractor \
-  -p 5000:5000 \
+  -p 127.0.0.1:5000:5000 \
   -v /path/to/archives:/temp \
+  -v "$(pwd)/data:/data" \
   -e FNOS_MOUNT_PATH=/temp \
+  -e FNOS_DATA_DIR=/data \
+  --user "$(id -u):$(id -g)" \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,size=256m \
   roninriddle/fnos-extractor:latest
 
 # 访问 http://localhost:5000
@@ -76,7 +83,7 @@ cd fnos-extractor
 docker compose up -d
 ```
 
-仓库自带的 [docker-compose.yml](docker-compose.yml) 默认使用正式版 `latest` 镜像，并把宿主目录挂载到容器内 `/temp`。
+仓库自带的 [docker-compose.yml](docker-compose.yml) 默认使用正式版 `latest` 镜像，并把宿主目录挂载到容器内 `/temp`。如需调整监听地址或 NAS 文件权限，可复制 `.env.example` 为 `.env` 后修改其中的配置。
 
 ### 本地开发
 
@@ -89,6 +96,8 @@ brew install p7zip unrar unzip
 
 python app.py
 ```
+
+本地运行时请设置 `FNOS_MOUNT_PATH`，并确保该目录不是系统根目录 `/`。
 
 ---
 
@@ -109,6 +118,8 @@ python app.py
 
 ### API 端点
 
+默认 Docker Compose 仅监听本机地址 `127.0.0.1`；如需让局域网设备访问，请显式调整 `FNOS_BIND_ADDRESS`，并在 NAS 或网关上限制可信来源。
+
 - `GET /api/health` - 健康检查
 - `GET /api/metrics` - 系统指标
 - `POST /api/scan` - 扫描目录
@@ -128,9 +139,12 @@ python app.py
 
 ## 🔐 安全说明
 
-- ✅ 密码仅在内存处理，不上传
-- ✅ 成功密码缓存到本地JSON
-- ⚠️ 不要在词典中存放敏感密码
+- ⚠️ 应用未提供登录验证，因此默认只监听本机；切勿在不受控网络中暴露端口
+- ✅ 扫描、解压、重命名和删除路径只能位于 `FNOS_MOUNT_PATH` 内
+- ✅ 密码词典和成功密码缓存使用本机自动生成的密钥加密落盘，接口只返回计数
+- ✅ 解压前拒绝绝对路径、`..` 和链接型危险归档条目
+- ✅ Docker 默认仅监听本机，并启用非 root、只读根文件系统、零 capabilities
+- ⚠️ 请备份 `/data/passwords.key`；遗失该密钥将无法读取已有加密密码数据
 - ⚠️ 自动删除功能会永久删除文件
 - ✅ 建议在测试环境验证后使用
 
@@ -138,13 +152,12 @@ python app.py
 
 ## 📦 版本信息
 
-**当前版本**: v1.3.28
+**当前版本**: v1.3.29
 
 **本次更新**:
-- 🧭 修正路径状态恢复逻辑，保持页面显示路径与实际扫描/解压路径一致
-- 💾 优化最近扫描目录、指定解压目录和解压模式的记忆行为
-- 📂 继续完善设置弹窗、目录树、子目录跳转的统一路径入口
-- ✅ 本版已整理为正式版 1.3.28
+- 🛡️ 加固路径访问、解压条目校验与容器权限，阻止路径越界和 Zip Slip
+- 🔒 密码词典与成功缓存自动加密，界面不再展示明文密码
+- ☕ 首页底部新增 Ronin 赞赏码
 
 ---
 
@@ -158,4 +171,4 @@ python app.py
 
 ---
 
-**Last Updated**: 2026-07-13 | Version: 1.3.28
+**Last Updated**: 2026-08-13 | Version: 1.3.29

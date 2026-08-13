@@ -2,17 +2,20 @@
 """
 FNOS 批量文件处理工具
 支持递归扫描、密码检测和 Web 界面
-版本: 1.3.28
+版本: 1.3.29
 """
 
 from flask import Flask, render_template, jsonify, request, send_file
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import os
 import subprocess
 import json
 import threading
 import re
+import stat
+import tarfile
+import zipfile
 from queue import Queue
 from typing import Dict, List, Tuple, Optional, Set
 import logging
@@ -23,11 +26,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import psutil
 import platform
+from cryptography.fernet import Fernet, InvalidToken
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-APP_VERSION = '1.3.28'
+APP_VERSION = '1.3.29'
 APP_RELEASE_TAG = ''
 APP_DISPLAY_VERSION = f"{APP_VERSION}-{APP_RELEASE_TAG}" if APP_RELEASE_TAG else APP_VERSION
 
@@ -64,8 +68,55 @@ def _resolve_default_mount_path() -> str:
     return '/vol1/1000/Temp'
 
 DEFAULT_MOUNT_PATH = _resolve_default_mount_path()
-LOG_FILE_PATH = Path(os.environ.get('FNOS_LOG_FILE', '/app/fnos.log'))
+ALLOWED_ROOT = Path(DEFAULT_MOUNT_PATH).resolve(strict=False)
+DATA_DIR = Path(os.environ.get('FNOS_DATA_DIR', '/data'))
+LOG_FILE_PATH = Path(os.environ.get('FNOS_LOG_FILE', str(DATA_DIR / 'fnos.log')))
+PASSWORD_ENCRYPTION_KEY_FILE = Path(os.environ.get('FNOS_PASSWORD_KEY_FILE', str(DATA_DIR / 'passwords.key')))
 MAX_CONCURRENT_EXTRACTIONS = 32
+
+def _resolve_allowed_path(raw_path, *, must_exist: bool = False, kind: Optional[str] = None) -> str:
+    """解析并限制路径在 FNOS_MOUNT_PATH 内，阻止 ../、绝对路径越界和符号链接逃逸。"""
+    if not isinstance(raw_path, (str, os.PathLike)) or not str(raw_path).strip():
+        raise APIError('无效路径', 400, 'INVALID_PATH')
+
+    candidate = Path(str(raw_path).strip()).expanduser()
+    if not candidate.is_absolute():
+        candidate = ALLOWED_ROOT / candidate
+    try:
+        resolved = candidate.resolve(strict=must_exist)
+        if os.path.commonpath([str(ALLOWED_ROOT), str(resolved)]) != str(ALLOWED_ROOT):
+            raise APIError('路径超出允许的挂载目录', 403, 'PATH_OUTSIDE_ROOT')
+    except ValueError:
+        raise APIError('路径超出允许的挂载目录', 403, 'PATH_OUTSIDE_ROOT')
+    except FileNotFoundError:
+        raise APIError(f'路径不存在: {candidate}', 400, 'PATH_NOT_FOUND')
+
+    if must_exist and kind == 'file' and not resolved.is_file():
+        raise APIError(f'文件不存在或不可用: {resolved}', 400, 'INVALID_FILE')
+    if must_exist and kind == 'dir' and not resolved.is_dir():
+        raise APIError(f'目录不存在或不可用: {resolved}', 400, 'INVALID_DIRECTORY')
+    return str(resolved)
+
+def _validate_runtime_security() -> None:
+    if str(ALLOWED_ROOT) == os.path.sep:
+        raise RuntimeError('FNOS_MOUNT_PATH 不得配置为根目录 /')
+
+def _get_fernet() -> Fernet:
+    """获取本地自动生成的密码数据密钥，避免要求用户额外配置。"""
+    try:
+        key = PASSWORD_ENCRYPTION_KEY_FILE.read_bytes().strip()
+    except FileNotFoundError:
+        PASSWORD_ENCRYPTION_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        key = Fernet.generate_key()
+        temp_path = PASSWORD_ENCRYPTION_KEY_FILE.with_suffix('.tmp')
+        with open(temp_path, 'wb') as file_handle:
+            file_handle.write(key)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, PASSWORD_ENCRYPTION_KEY_FILE)
+    try:
+        return Fernet(key)
+    except ValueError as exc:
+        raise RuntimeError(f'密码数据密钥无效: {PASSWORD_ENCRYPTION_KEY_FILE}') from exc
 
 class AdjustableConcurrencyLimiter:
     """线程安全的可调并发限制器，允许排队任务实时感知新并发数。"""
@@ -112,6 +163,24 @@ def _has_command(cmd_name: str) -> bool:
 def _contains_non_ascii(value: Optional[str]) -> bool:
     """判断字符串是否包含非 ASCII 字符，用于兼容中文密码。"""
     return bool(value) and any(ord(ch) > 127 for ch in value)
+
+def _redact_command(command: List[str]) -> str:
+    """生成不会泄露 -p/-P 密码参数的日志文本。"""
+    redacted = []
+    hide_next = False
+    for item in command:
+        if hide_next:
+            redacted.append('[已隐藏]')
+            hide_next = False
+            continue
+        if item == '-P':
+            redacted.append(item)
+            hide_next = True
+        elif item.startswith('-p') and item != '-p-':
+            redacted.append('-p[已隐藏]')
+        else:
+            redacted.append(item)
+    return ' '.join(redacted)
 
 def _get_app_timezone_name() -> str:
     """获取应用日志时区，优先使用环境变量。"""
@@ -314,43 +383,66 @@ def handle_internal_error(error):
 # 密码词典和缓存
 # ========================================
 PASSWORD_DICT = []
-# 优先使用当前目录的 passwords.txt，否则使用 /app 目录
-PASSWORD_DICT_FILE = Path('passwords.txt') if Path('passwords.txt').exists() else Path('/app/passwords.txt')
-PASSWORD_CACHE_FILE = Path('password_cache.json') if Path('password_cache.json').exists() else Path('/app/password_cache.json')
+PASSWORD_DICT_FILE = Path(os.environ.get('FNOS_PASSWORD_DICT_FILE', str(DATA_DIR / 'passwords.enc')))
+PASSWORD_CACHE_FILE = Path(os.environ.get('FNOS_PASSWORD_CACHE_FILE', str(DATA_DIR / 'password_cache.enc')))
+LEGACY_PASSWORD_DICT_FILE = Path(os.environ.get('FNOS_LEGACY_PASSWORD_FILE', 'passwords.txt'))
+LEGACY_PASSWORD_CACHE_FILE = Path(os.environ.get('FNOS_LEGACY_PASSWORD_CACHE_FILE', 'password_cache.json'))
 PASSWORD_CACHE = {}  # 格式: {file_path: {password: timestamp}}
 PASSWORD_SUCCESS_CACHE = {}  # 成功的密码缓存 {file_path: password}
 
+def _save_encrypted_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    plaintext = json.dumps(value, ensure_ascii=False).encode('utf-8')
+    encrypted = _get_fernet().encrypt(plaintext)
+    temp_path = path.with_suffix(path.suffix + '.tmp')
+    with open(temp_path, 'wb') as file_handle:
+        file_handle.write(encrypted)
+    os.chmod(temp_path, 0o600)
+    os.replace(temp_path, path)
+
+def _load_encrypted_json(path: Path, default):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(_get_fernet().decrypt(path.read_bytes()).decode('utf-8'))
+    except InvalidToken as exc:
+        raise RuntimeError(f'密码数据无法解密，请确认密钥文件未被更换: {path}') from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f'加密密码数据已损坏: {path}') from exc
+
 def load_password_cache():
-    """加载密码缓存"""
+    """加载加密密码缓存，并迁移旧版明文 JSON。"""
     global PASSWORD_SUCCESS_CACHE
-    if PASSWORD_CACHE_FILE.exists():
+    PASSWORD_SUCCESS_CACHE = _load_encrypted_json(PASSWORD_CACHE_FILE, {})
+    if not PASSWORD_CACHE_FILE.exists() and LEGACY_PASSWORD_CACHE_FILE.exists():
         try:
-            with open(PASSWORD_CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(LEGACY_PASSWORD_CACHE_FILE, 'r', encoding='utf-8') as f:
                 PASSWORD_SUCCESS_CACHE = json.load(f)
-                logger.info(f"已加载 {len(PASSWORD_SUCCESS_CACHE)} 个缓存密码")
+            save_password_cache()
+            LEGACY_PASSWORD_CACHE_FILE.unlink()
+            logger.warning('已将旧版明文密码缓存迁移为加密存储')
         except Exception as e:
-            logger.warning(f"密码缓存加载失败: {e}")
+            logger.warning(f"旧版密码缓存迁移失败: {e}")
+    logger.info(f"已加载 {len(PASSWORD_SUCCESS_CACHE)} 个缓存密码")
 
 def save_password_cache():
-    """保存密码缓存"""
+    """加密保存成功密码缓存。"""
     try:
-        PASSWORD_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PASSWORD_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(PASSWORD_SUCCESS_CACHE, f, ensure_ascii=False, indent=2)
+        _save_encrypted_json(PASSWORD_CACHE_FILE, PASSWORD_SUCCESS_CACHE)
     except Exception as e:
         logger.warning(f"密码缓存保存失败: {e}")
 
 def load_password_dict():
-    """加载密码词典"""
+    """加载加密密码词典，并迁移旧版明文词典。"""
     global PASSWORD_DICT
-    # 优先使用当前目录，再用 /app 目录
-    dict_path = Path('passwords.txt') if Path('passwords.txt').exists() else Path('/app/passwords.txt')
-    if dict_path.exists():
-        with open(dict_path, 'r', encoding='utf-8', errors='ignore') as f:
+    PASSWORD_DICT = _load_encrypted_json(PASSWORD_DICT_FILE, [])
+    if not PASSWORD_DICT_FILE.exists() and LEGACY_PASSWORD_DICT_FILE.exists():
+        with open(LEGACY_PASSWORD_DICT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
             PASSWORD_DICT = [line.strip() for line in f if line.strip()]
-        logger.info(f"已加载 {len(PASSWORD_DICT)} 个密码")
-    else:
-        logger.warning("密码词典不存在")
+        _save_encrypted_json(PASSWORD_DICT_FILE, PASSWORD_DICT)
+        LEGACY_PASSWORD_DICT_FILE.unlink()
+        logger.warning('已将旧版明文密码词典迁移为加密存储')
+    logger.info(f"已加载 {len(PASSWORD_DICT)} 个密码")
 
 def is_multipart_archive(file_path: str) -> bool:
     """
@@ -692,6 +784,68 @@ def is_archive_encrypted(file_path: str) -> Tuple[bool, Optional[bool]]:
     
     return False, None
 
+def _validate_archive_member_name(member_name: str) -> Optional[str]:
+    """返回不安全原因；安全时返回 None。"""
+    normalized = str(member_name or '').replace('\\', '/')
+    posix_path = PurePosixPath(normalized)
+    windows_path = PureWindowsPath(str(member_name or ''))
+    if not normalized or normalized.startswith('/') or windows_path.is_absolute() or windows_path.drive:
+        return '包含绝对路径'
+    if any(part == '..' for part in posix_path.parts):
+        return '包含父目录跳转 ..'
+    return None
+
+def validate_archive_entries(file_path: str, password: Optional[str] = None) -> Tuple[bool, str]:
+    """解压前拒绝路径穿越、绝对路径和链接条目。"""
+    file_name = Path(file_path).name.lower()
+    try:
+        if file_name.endswith('.zip'):
+            with zipfile.ZipFile(file_path) as archive:
+                for info in archive.infolist():
+                    reason = _validate_archive_member_name(info.filename)
+                    unix_mode = (info.external_attr >> 16) & 0xFFFF
+                    if stat.S_ISLNK(unix_mode):
+                        reason = '包含符号链接'
+                    if reason:
+                        return False, f'归档包含不安全条目: {info.filename}（{reason}）'
+            return True, ''
+
+        if file_name.endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz')):
+            with tarfile.open(file_path, mode='r:*') as archive:
+                for member in archive.getmembers():
+                    reason = _validate_archive_member_name(member.name)
+                    if member.issym() or member.islnk():
+                        reason = '包含符号链接或硬链接'
+                    if reason:
+                        return False, f'归档包含不安全条目: {member.name}（{reason}）'
+            return True, ''
+
+        if _has_command('7z'):
+            cmd = ['7z', 'l', '-slt', file_path]
+            cmd.append(f'-p{password}' if password else '-p-')
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                output = (result.stdout + result.stderr).lower()
+                if 'password' in output or 'encrypted' in output:
+                    return False, '密码错误' if password else '需要密码'
+                return False, '无法读取归档条目清单，已拒绝解压'
+            entries_started = False
+            for line in result.stdout.splitlines():
+                if line.startswith('----------'):
+                    entries_started = True
+                    continue
+                if not entries_started or not line.startswith('Path = '):
+                    continue
+                member_name = line[7:].strip()
+                reason = _validate_archive_member_name(member_name)
+                if reason:
+                    return False, f'归档包含不安全条目: {member_name}（{reason}）'
+            return True, ''
+
+        return False, '缺少 7z，无法安全检查该归档格式'
+    except (zipfile.BadZipFile, tarfile.TarError, OSError, subprocess.TimeoutExpired) as exc:
+        return False, f'归档安全检查失败: {str(exc)[:120]}'
+
 def extract_archive(
     file_path: str,
     extract_dir: str,
@@ -706,6 +860,12 @@ def extract_archive(
     timeout: 自定义超时时间，如果为None则使用默认的extraction_timeout设置
     """
     try:
+        file_path = _resolve_allowed_path(file_path, must_exist=True, kind='file')
+        extract_dir = _resolve_allowed_path(extract_dir)
+        archive_safe, archive_error = validate_archive_entries(file_path, password=password)
+        if not archive_safe:
+            logger.warning(f'拒绝不安全归档 {file_path}: {archive_error}')
+            return False, archive_error
         actual_timeout = timeout if timeout is not None else timeout_settings.get('extraction_timeout', 300)
         dir_ok, dir_error = _ensure_read_write_directory(extract_dir)
         if not dir_ok:
@@ -893,7 +1053,7 @@ def extract_archive(
             
             error_msg = result.stderr or result.stdout or "未知错误"
             friendly_error = _build_friendly_extraction_error(error_msg, extract_dir)
-            logger.error(f"解压命令失败 [{file_path}]: 返回码 {result.returncode}\n命令: {' '.join(cmd)}\n错误: {error_msg}")
+            logger.error(f"解压命令失败 [{file_path}]: 返回码 {result.returncode}\n命令: {_redact_command(cmd)}\n错误: {error_msg}")
             return False, friendly_error
             
     except subprocess.TimeoutExpired:
@@ -1107,7 +1267,7 @@ def extract_with_password_dict(
         
         try:
             # 每个密码尝试有独立的超时
-            logger.debug(f"尝试密码 {attempt+1}/{min(dict_size, max_retries)}: {password}")
+            logger.debug(f"尝试密码 {attempt+1}/{min(dict_size, max_retries)}: [已隐藏]")
             attempt_timeout = full_extraction_timeout if use_full_timeout_directly else timeout_per_password
             success, msg = extract_archive(
                 file_path,
@@ -1261,7 +1421,8 @@ def _normalize_scan_roots(raw_paths, fallback_path: str, recursive: bool) -> Lis
         path = item.strip()
         if not path:
             continue
-        abs_path = os.path.abspath(path)
+        path = _resolve_allowed_path(path, must_exist=True, kind='dir')
+        abs_path = path
         if abs_path in seen:
             continue
         seen.add(abs_path)
@@ -1292,6 +1453,10 @@ def _normalize_scan_roots(raw_paths, fallback_path: str, recursive: bool) -> Lis
 
 def _validate_scan_root(root_dir: str) -> Optional[Tuple[str, int]]:
     """校验扫描目录。返回 (错误消息, HTTP 状态码) 或 None。"""
+    try:
+        root_dir = _resolve_allowed_path(root_dir, must_exist=True, kind='dir')
+    except APIError as exc:
+        return exc.message, exc.status_code
     root_path = Path(root_dir)
     if not root_path.exists():
         logger.error(f"目录不存在: {root_dir}")
@@ -1716,8 +1881,7 @@ def process_extraction_task(task_id: str, archive_file: str, extract_dir: str, e
                             'status': 'success',
                             'file': archive_file,
                             'progress': 100,
-                            'message': f"成功 (密码: {used_pwd})",
-                            'password': used_pwd,
+                            'message': "成功（密码已安全缓存）",
                             'extract_dir': actual_extract_dir
                         }
                     if extraction_options.get('auto_delete_success', False):
@@ -1795,7 +1959,7 @@ def index():
 def list_directories():
     """列出目录树的一层子目录。"""
     data = request.get_json() or {}
-    root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    root_dir = _resolve_allowed_path(data.get('path', DEFAULT_MOUNT_PATH), must_exist=True, kind='dir')
     try:
         limit = int(data.get('limit', 500))
     except (TypeError, ValueError):
@@ -1808,10 +1972,12 @@ def list_directories():
         return jsonify({'error': message}), status_code
 
     directories, truncated = _list_child_directories(root_dir, limit=limit)
+    root_path = Path(root_dir)
+    parent_path = None if root_path == ALLOWED_ROOT else str(root_path.parent)
     return jsonify({
         'path': root_dir,
         'name': Path(root_dir).name or root_dir,
-        'parent': str(Path(root_dir).parent) if Path(root_dir).parent != Path(root_dir) else None,
+        'parent': parent_path,
         'directories': directories,
         'total': len(directories),
         'truncated': truncated
@@ -1821,8 +1987,10 @@ def list_directories():
 def scan_directory():
     """扫描目录"""
     data = request.get_json() or {}
-    root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    root_dir = _resolve_allowed_path(data.get('path', DEFAULT_MOUNT_PATH), must_exist=True, kind='dir')
     selected_paths = data.get('paths')
+    if isinstance(selected_paths, list):
+        selected_paths = [_resolve_allowed_path(path, must_exist=True, kind='dir') for path in selected_paths]
     include_subdirs = data.get('include_subdirs', True)
     scan_mode = data.get('scan_mode', 'archives')
 
@@ -2018,13 +2186,14 @@ def extract():
             return jsonify({'error': '无效的请求数据'}), 400
 
         archives = data.get('archives', [])
-        extract_base = data.get('extract_to', DEFAULT_MOUNT_PATH)
+        extract_base = _resolve_allowed_path(data.get('extract_to', DEFAULT_MOUNT_PATH))
         extract_mode = data.get('extract_mode', 'to_specified')  # 新增参数: to_current, to_same_name, to_specified
         extract_to_same_name = data.get('extract_to_same_name', False)
         auto_delete_success = data.get('auto_delete_success', False)
 
-        if not archives:
+        if not isinstance(archives, list) or not archives:
             return jsonify({'error': '没有选择任何文件'}), 400
+        archives = [_resolve_allowed_path(path, must_exist=True, kind='file') for path in archives]
 
         # 保存提取选项
         global extraction_options
@@ -2055,6 +2224,7 @@ def extract():
                 extract_dir = os.path.join(str(Path(archive).parent), _archive_output_name(archive))
             else:
                 extract_dir = extract_base
+            extract_dir = _resolve_allowed_path(extract_dir)
             task_extract_dirs[task_id] = extract_dir
 
             thread = threading.Thread(
@@ -2173,7 +2343,7 @@ def update_settings():
 def scan_subdirs():
     """扫描子目录中的压缩包"""
     data = request.get_json() or {}
-    root_dir = data.get('path', DEFAULT_MOUNT_PATH)
+    root_dir = _resolve_allowed_path(data.get('path', DEFAULT_MOUNT_PATH), must_exist=True, kind='dir')
     scan_mode = data.get('scan_mode', 'archives')
     
     if not Path(root_dir).exists():
@@ -2189,9 +2359,9 @@ def scan_subdirs():
 
 @app.route('/api/passwords', methods=['GET'])
 def get_passwords():
-    """获取当前密码词典"""
+    """只返回词典统计，永不通过 API 回传明文密码。"""
     return jsonify({
-        'passwords': PASSWORD_DICT,
+        'passwords': [],
         'count': len(PASSWORD_DICT)
     })
 
@@ -2211,11 +2381,7 @@ def update_passwords():
         global PASSWORD_DICT
         PASSWORD_DICT = [str(p).strip() for p in new_passwords if str(p).strip()]
         
-        # 保存到文件（优先使用当前目录）
-        dict_path = PASSWORD_DICT_FILE
-        dict_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(dict_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(PASSWORD_DICT))
+        _save_encrypted_json(PASSWORD_DICT_FILE, PASSWORD_DICT)
         
         logger.info(f"已更新 {len(PASSWORD_DICT)} 个密码")
         return jsonify({
@@ -2229,9 +2395,9 @@ def update_passwords():
 
 @app.route('/api/password-cache', methods=['GET'])
 def get_password_cache():
-    """获取密码缓存"""
+    """只返回缓存统计，永不回传文件名或明文密码。"""
     return jsonify({
-        'cache': PASSWORD_SUCCESS_CACHE,
+        'cache': {},
         'count': len(PASSWORD_SUCCESS_CACHE)
     })
 
@@ -2242,7 +2408,7 @@ def clear_password_cache():
     PASSWORD_SUCCESS_CACHE = {}
     try:
         PASSWORD_CACHE_FILE.unlink()
-    except:
+    except FileNotFoundError:
         pass
     return jsonify({'success': True, 'message': '已清空密码缓存'})
 
@@ -2308,6 +2474,7 @@ def rename_files():
         seen_targets = set()
 
         for index, file_path in enumerate(files):
+            file_path = _resolve_allowed_path(file_path, must_exist=True, kind='file')
             path = Path(file_path)
             if not path.exists() or not path.is_file():
                 return jsonify({'error': f'文件不存在或不可用: {file_path}'}), 400
@@ -2317,6 +2484,7 @@ def rename_files():
                 continue
 
             target_path = str(path.with_name(new_name))
+            target_path = _resolve_allowed_path(target_path)
             if target_path in seen_targets:
                 return jsonify({'error': f'批量重命名结果冲突: {new_name}'}), 400
 
@@ -2432,7 +2600,7 @@ def delete_archives():
                     failed_files.append({'file': str(file_path), 'error': '无效的文件路径'})
                     continue
 
-                file_path = file_path.strip()
+                file_path = _resolve_allowed_path(file_path.strip(), must_exist=True, kind='file')
                 # 安全检查：确保文件确实存在且是我们期望的类型
                 if not os.path.exists(file_path):
                     failed_files.append({'file': file_path, 'error': '文件不存在'})
@@ -2444,6 +2612,7 @@ def delete_archives():
                     continue
 
                 for target_path in _get_archive_delete_targets(file_path):
+                    target_path = _resolve_allowed_path(target_path, must_exist=True, kind='file')
                     normalized_target = os.path.normpath(target_path)
                     if normalized_target in seen_targets:
                         continue
@@ -2548,6 +2717,7 @@ def metrics():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    _validate_runtime_security()
     # 配置文件日志处理
     if 'TZ' in os.environ and hasattr(time, 'tzset'):
         time.tzset()

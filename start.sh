@@ -27,6 +27,7 @@ else
 fi
 
 echo "✓ 准备启动容器"
+mkdir -p data
 
 # 拉取最新镜像
 echo ""
