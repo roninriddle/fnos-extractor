@@ -25,11 +25,7 @@ RUN apt-get update && apt-get install -y \
     locales \
     tzdata \
     && rm -rf /var/lib/apt/lists/* \
-    && localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8 \
-    && groupadd --gid 10001 fnos \
-    && useradd --uid 10001 --gid fnos --create-home --shell /usr/sbin/nologin fnos \
-    && mkdir -p /data /temp \
-    && chown -R fnos:fnos /app /data /temp
+    && localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 
 # 复制应用文件
 COPY app.py .
@@ -46,8 +42,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # 暴露端口
 EXPOSE 5000
-
-USER fnos
 
 # 启动应用
 CMD ["python", "app.py"]

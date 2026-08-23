@@ -81,6 +81,10 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
+            position: relative;
+            z-index: 1;
+            pointer-events: auto;
+            cursor: pointer;
             color: #4f46e5;
             font-size: 14px;
             font-weight: 600;
@@ -1201,10 +1205,10 @@
                 <div class="donation-title">如果这个工具对你有帮助，欢迎请我喝一杯 ☕</div>
                 <img class="donation-image" src="{{ url_for('static', filename='images/donation.jpg') }}" alt="Ronin 的赞赏码" loading="lazy">
             </div>
-            <a class="footer-link" href="https://github.com/roninriddle/fnos-extractor" target="_blank" rel="noopener noreferrer">
+            <a class="footer-link" href="https://github.com/roninriddle/fnos-extractor" aria-label="前往 fnos-extractor GitHub 仓库">
                 🔗 前往 GitHub 检查更新
             </a>
-            <div class="footer-note">点击后将在新页面打开仓库主页</div>
+            <div class="footer-note">点击后将打开仓库主页</div>
         </div>
     </div>
 

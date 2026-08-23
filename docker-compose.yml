@@ -13,7 +13,6 @@ services:
       - /vol1/1000/Temp:/temp
       # 加密密码数据和日志
       - ./data:/data
-    user: "${FNOS_UID:-1000}:${FNOS_GID:-1000}"
     read_only: true
     cap_drop:
       - ALL

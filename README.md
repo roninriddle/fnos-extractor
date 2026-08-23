@@ -1,4 +1,4 @@
-# FNOS 批量文件处理工具 v1.3.29
+# FNOS 批量文件处理工具 v1.3.30
 
 🚀 生产级批量文件处理工具 - 支持 Web UI、密码破解、多卷文件、智能解压与批量重命名
 
@@ -65,7 +65,6 @@ docker run -d \
   -v "$(pwd)/data:/data" \
   -e FNOS_MOUNT_PATH=/temp \
   -e FNOS_DATA_DIR=/data \
-  --user "$(id -u):$(id -g)" \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges \
@@ -83,7 +82,7 @@ cd fnos-extractor
 docker compose up -d
 ```
 
-仓库自带的 [docker-compose.yml](docker-compose.yml) 默认使用正式版 `latest` 镜像，并把宿主目录挂载到容器内 `/temp`。如需调整监听地址或 NAS 文件权限，可复制 `.env.example` 为 `.env` 后修改其中的配置。
+仓库自带的 [docker-compose.yml](docker-compose.yml) 默认使用正式版 `latest` 镜像，并把宿主目录挂载到容器内 `/temp`。如需调整监听地址，可复制 `.env.example` 为 `.env` 后修改其中的配置。
 
 ### 本地开发
 
@@ -143,7 +142,7 @@ python app.py
 - ✅ 扫描、解压、重命名和删除路径只能位于 `FNOS_MOUNT_PATH` 内
 - ✅ 密码词典和成功密码缓存使用本机自动生成的密钥加密落盘，接口只返回计数
 - ✅ 解压前拒绝绝对路径、`..` 和链接型危险归档条目
-- ✅ Docker 默认仅监听本机，并启用非 root、只读根文件系统、零 capabilities
+- ✅ Docker 默认仅监听本机，并启用只读根文件系统、零 capabilities
 - ⚠️ 请备份 `/data/passwords.key`；遗失该密钥将无法读取已有加密密码数据
 - ⚠️ 自动删除功能会永久删除文件
 - ✅ 建议在测试环境验证后使用
@@ -152,12 +151,12 @@ python app.py
 
 ## 📦 版本信息
 
-**当前版本**: v1.3.29
+**当前版本**: v1.3.30
 
 **本次更新**:
-- 🛡️ 加固路径访问、解压条目校验与容器权限，阻止路径越界和 Zip Slip
-- 🔒 密码词典与成功缓存自动加密，界面不再展示明文密码
-- ☕ 首页底部新增 Ronin 赞赏码
+- ↩️ 恢复与飞牛共享目录兼容的默认容器用户，避免升级后出现目录无权读取
+- 🔗 修复首页 GitHub 链接在飞牛内嵌页面中无法打开的问题
+- 🛡️ 保留路径、归档条目和密码数据保护
 
 ---
 
@@ -171,4 +170,4 @@ python app.py
 
 ---
 
-**Last Updated**: 2026-08-13 | Version: 1.3.29
+**Last Updated**: 2026-08-23 | Version: 1.3.30
